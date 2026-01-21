@@ -235,11 +235,13 @@ def run_evaluation(args: VSIBenchArguments):
     logger.info(f'Loading model: {args.model}')
 
     # Create InferArguments for model loading
-    infer_args = InferArguments(
-        model=args.model,
-        adapters=args.adapters,
-        infer_backend='pt',  # Use transformers backend
-    )
+    infer_kwargs = {
+        'model': args.model,
+        'infer_backend': 'transformers',
+    }
+    if args.adapters:
+        infer_kwargs['adapters'] = args.adapters
+    infer_args = InferArguments(**infer_kwargs)
 
     # Prepare model and template
     model, template = prepare_model_template(infer_args)

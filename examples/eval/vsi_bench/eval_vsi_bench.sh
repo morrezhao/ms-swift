@@ -11,9 +11,10 @@
 #   bash eval_vsi_bench.sh
 
 # Configuration
-MODEL="/upfs/models/Qwen/Qwen3-VL-32B-Instruct"  
+MDOEL_NAME="Qwen3-VL-32B-Instruct"
+MODEL="/upfs/models/Qwen/${MODEL_NAME}"  
 VIDEO_DIR="/upfs/enhan/data/nyu_visionx/VSI-Bench"  
-OUTPUT_DIR="/upfs/enhan/vsi_bench_output/${MODEL}"
+OUTPUT_DIR="/upfs/enhan/vsi_bench_output/${MODEL_NAME}"
 NUM_FRAMES=32
 EVAL_LIMIT=100  # Set to null or remove for full evaluation
 
@@ -24,7 +25,7 @@ python -m swift.pipelines.eval.run_vsi_bench \
     --num_frames ${NUM_FRAMES} \
     --output_dir ${OUTPUT_DIR} \
     --eval_limit ${EVAL_LIMIT} \
-    --max_new_tokens 256 \
+    --max_new_tokens 2048 \
     --temperature 0.0 \
     --verbose
 
