@@ -34,7 +34,8 @@ class VSIBenchArguments:
     # Model settings
     model: str = field(default='Qwen/Qwen2.5-VL-7B-Instruct', metadata={'help': 'Model name or path'})
     adapters: Optional[List[str]] = field(default=None, metadata={'help': 'LoRA adapter paths'})
-    infer_backend: str = field(default='pt', metadata={'help': 'Inference backend: pt, vllm, lmdeploy'})
+    infer_backend: str = field(default='transformers', metadata={'help': 'Inference backend: transformers, vllm'})
+    tensor_parallel_size: Optional[int] = field(default=None, metadata={'help': 'Tensor parallel size for vLLM'})
 
     # Data settings
     video_dir: str = field(default='', metadata={'help': 'Directory containing VSI-Bench videos or frames'})
@@ -224,30 +225,40 @@ def run_evaluation(args: VSIBenchArguments):
         args: Evaluation arguments
     """
     from swift.arguments import InferArguments
-    from swift.infer_engine import TransformersEngine
     from swift.pipelines.eval.vsi_bench import VSIBenchEvaluator
-    from swift.pipelines.utils import prepare_model_template
+    from swift.pipelines.infer import SwiftInfer
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Load model using InferArguments pattern
     logger.info(f'Loading model: {args.model}')
+    logger.info(f'Inference backend: {args.infer_backend}')
 
     # Create InferArguments for model loading
     infer_kwargs = {
         'model': args.model,
-        'infer_backend': 'transformers',
+        'infer_backend': args.infer_backend,
     }
     if args.adapters:
         infer_kwargs['adapters'] = args.adapters
+
+    # Add tensor parallel size for vLLM
+    if args.infer_backend == 'vllm' and args.tensor_parallel_size:
+        infer_kwargs['vllm_tensor_parallel_size'] = args.tensor_parallel_size
+
     infer_args = InferArguments(**infer_kwargs)
 
-    # Prepare model and template
-    model, template = prepare_model_template(infer_args)
+    # Create inference engine using SwiftInfer's method
+    if args.infer_backend == 'vllm':
+        template = infer_args.get_template()
+        infer_engine = SwiftInfer.get_infer_engine(infer_args, template)
+    else:
+        from swift.infer_engine import TransformersEngine
+        from swift.pipelines.utils import prepare_model_template
+        model, template = prepare_model_template(infer_args)
+        infer_engine = TransformersEngine(model, template=template)
 
-    # Create inference engine
-    infer_engine = TransformersEngine(model, template=template)
     logger.info(f'Model loaded: {infer_engine.model_name}')
 
     # Load dataset
@@ -293,7 +304,8 @@ def main():
     parser = argparse.ArgumentParser(description='VSI-Bench Evaluation')
     parser.add_argument('--model', type=str, default='Qwen/Qwen2.5-VL-7B-Instruct', help='Model name or path')
     parser.add_argument('--adapters', type=str, nargs='*', default=None, help='LoRA adapter paths')
-    parser.add_argument('--infer_backend', type=str, default='pt', help='Inference backend')
+    parser.add_argument('--infer_backend', type=str, default='transformers', help='Inference backend: transformers, vllm')
+    parser.add_argument('--tensor_parallel_size', type=int, default=None, help='Tensor parallel size for vLLM (number of GPUs)')
     parser.add_argument('--video_dir', type=str, required=True, help='Directory containing videos or frames')
     parser.add_argument('--num_frames', type=int, default=32, help='Number of frames to sample')
     parser.add_argument('--eval_limit', type=int, default=None, help='Limit number of samples')
