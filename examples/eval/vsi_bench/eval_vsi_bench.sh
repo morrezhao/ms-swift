@@ -14,6 +14,7 @@
 MODEL_NAME="Qwen3-VL-32B-Instruct"
 MODEL="/upfs/models/Qwen/${MODEL_NAME}"
 VIDEO_DIR="/upfs/enhan/data/nyu_visionx/VSI-Bench"
+DATA_PATH="/upfs/enhan/data/nyu_visionx/VSI-Bench/test.jsonl"  # Local dataset file (JSON/JSONL)
 OUTPUT_DIR="/upfs/enhan/vsi_bench_output/${MODEL_NAME}"
 NUM_FRAMES=32
 EVAL_LIMIT=100  # Set to empty or remove for full evaluation
@@ -55,6 +56,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python -m swift.pipelines.eval.run_vsi_bench \
     --model ${MODEL} \
     --infer_backend vllm \
     --tensor_parallel_size 4 \
+    --data_path ${DATA_PATH} \
     --video_dir ${VIDEO_DIR} \
     --num_frames ${NUM_FRAMES} \
     --output_dir ${OUTPUT_DIR} \

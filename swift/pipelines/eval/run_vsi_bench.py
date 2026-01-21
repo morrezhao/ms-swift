@@ -38,6 +38,7 @@ class VSIBenchArguments:
     tensor_parallel_size: Optional[int] = field(default=None, metadata={'help': 'Tensor parallel size for vLLM'})
 
     # Data settings
+    data_path: Optional[str] = field(default=None, metadata={'help': 'Local path to VSI-Bench dataset (JSON/JSONL file)'})
     video_dir: str = field(default='', metadata={'help': 'Directory containing VSI-Bench videos or frames'})
     num_frames: int = field(default=32, metadata={'help': 'Number of frames to sample from video'})
     eval_limit: Optional[int] = field(default=None, metadata={'help': 'Limit number of samples to evaluate'})
@@ -52,30 +53,74 @@ class VSIBenchArguments:
     verbose: bool = field(default=False, metadata={'help': 'Print verbose output'})
 
 
-def load_vsi_bench_dataset(video_dir: str, num_frames: int = 32, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Load VSI-Bench dataset from HuggingFace.
+def load_vsi_bench_dataset(
+    video_dir: str,
+    num_frames: int = 32,
+    limit: Optional[int] = None,
+    data_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Load VSI-Bench dataset from local file or HuggingFace.
 
     Args:
         video_dir: Directory containing videos or frames
         num_frames: Number of frames to sample
         limit: Optional limit on number of samples
+        data_path: Local path to dataset file (JSON or JSONL)
 
     Returns:
         List of dataset samples with video/frame paths
     """
-    from datasets import load_dataset
+    import json
 
-    logger.info('Loading VSI-Bench dataset from HuggingFace...')
+    if data_path:
+        # Load from local file
+        logger.info(f'Loading VSI-Bench dataset from local file: {data_path}')
 
-    try:
-        dataset = load_dataset('nyu-visionx/VSI-Bench', split='test')
-    except Exception as e:
-        logger.error(f'Failed to load VSI-Bench dataset: {e}')
-        logger.info('Trying to load from local cache or alternative source...')
-        raise
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f'Dataset file not found: {data_path}')
+
+        data = []
+        if data_path.endswith('.jsonl'):
+            # Load JSONL format
+            with open(data_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        data.append(json.loads(line))
+        elif data_path.endswith('.json'):
+            # Load JSON format
+            with open(data_path, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+                if isinstance(loaded, list):
+                    data = loaded
+                elif isinstance(loaded, dict):
+                    # Handle dict format like {"data": [...]}
+                    for key in ['data', 'samples', 'test', 'items']:
+                        if key in loaded and isinstance(loaded[key], list):
+                            data = loaded[key]
+                            break
+                    if not data:
+                        data = [loaded]
+        else:
+            raise ValueError(f'Unsupported file format: {data_path}. Use .json or .jsonl')
+
+        dataset = data
+    else:
+        # Load from HuggingFace
+        from datasets import load_dataset as hf_load_dataset
+
+        logger.info('Loading VSI-Bench dataset from HuggingFace...')
+
+        try:
+            dataset = hf_load_dataset('nyu-visionx/VSI-Bench', split='test')
+            dataset = list(dataset)
+        except Exception as e:
+            logger.error(f'Failed to load VSI-Bench dataset: {e}')
+            logger.info('Trying to load from local cache or alternative source...')
+            raise
 
     if limit:
-        dataset = dataset.select(range(min(limit, len(dataset))))
+        dataset = dataset[:limit]
 
     samples = []
     for idx, row in enumerate(dataset):
@@ -266,6 +311,7 @@ def run_evaluation(args: VSIBenchArguments):
         video_dir=args.video_dir,
         num_frames=args.num_frames,
         limit=args.eval_limit,
+        data_path=args.data_path,
     )
 
     # Run inference
@@ -306,6 +352,7 @@ def main():
     parser.add_argument('--adapters', type=str, nargs='*', default=None, help='LoRA adapter paths')
     parser.add_argument('--infer_backend', type=str, default='transformers', help='Inference backend: transformers, vllm')
     parser.add_argument('--tensor_parallel_size', type=int, default=None, help='Tensor parallel size for vLLM (number of GPUs)')
+    parser.add_argument('--data_path', type=str, default=None, help='Local path to VSI-Bench dataset (JSON/JSONL)')
     parser.add_argument('--video_dir', type=str, required=True, help='Directory containing videos or frames')
     parser.add_argument('--num_frames', type=int, default=32, help='Number of frames to sample')
     parser.add_argument('--eval_limit', type=int, default=None, help='Limit number of samples')
