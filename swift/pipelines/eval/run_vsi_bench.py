@@ -20,9 +20,8 @@ For using frames instead of videos:
 import argparse
 import json
 import os
-import sys
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from swift.utils import get_logger
 
@@ -146,29 +145,32 @@ def build_prompt(sample: Dict[str, Any]) -> str:
 
 
 def run_inference(
-    model,
-    template,
+    infer_engine,
     samples: List[Dict[str, Any]],
     args: VSIBenchArguments,
 ) -> List[Dict[str, Any]]:
     """Run inference on VSI-Bench samples.
 
     Args:
-        model: Loaded model
-        template: Model template
+        infer_engine: Inference engine instance
         samples: List of dataset samples
         args: Evaluation arguments
 
     Returns:
         List of samples with predictions
     """
-    from swift.infer_engine import TransformersEngine
-    from swift.infer_engine.protocol import InferRequest
+    from tqdm import tqdm
 
-    engine = TransformersEngine(model, template=template)
+    from swift.infer_engine import InferRequest, RequestConfig
+
+    request_config = RequestConfig(
+        max_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+    )
 
     results = []
-    for i, sample in enumerate(samples):
+    for i, sample in enumerate(tqdm(samples, desc='Inference', disable=args.verbose)):
         if args.verbose:
             logger.info(f'Processing sample {i+1}/{len(samples)}: {sample["id"]}')
 
@@ -176,22 +178,21 @@ def run_inference(
 
         # Prepare request
         messages = [{'role': 'user', 'content': prompt}]
-        infer_request = InferRequest(messages=messages)
 
         # Add video or images
+        videos = []
+        images = []
         if 'video_path' in sample:
-            infer_request.videos = [sample['video_path']]
+            videos = [sample['video_path']]
         elif 'frame_paths' in sample:
-            infer_request.images = sample['frame_paths']
+            images = sample['frame_paths']
+
+        infer_request = InferRequest(messages=messages, videos=videos, images=images)
 
         # Run inference
         try:
-            response = engine.infer(
-                infer_request,
-                max_new_tokens=args.max_new_tokens,
-                temperature=args.temperature,
-                top_p=args.top_p,
-            )
+            response_list = infer_engine.infer([infer_request], request_config, use_tqdm=False)
+            response = response_list[0]
             prediction = response.choices[0].message.content
         except Exception as e:
             logger.warning(f'Inference failed for sample {sample["id"]}: {e}')
@@ -222,26 +223,30 @@ def run_evaluation(args: VSIBenchArguments):
     Args:
         args: Evaluation arguments
     """
-    from swift.llm import get_model_tokenizer
-    from swift.model import get_default_template_type
-    from swift.template import get_template
+    from swift.arguments import InferArguments
+    from swift.infer_engine import TransformersEngine
     from swift.pipelines.eval.vsi_bench import VSIBenchEvaluator
+    from swift.pipelines.utils import prepare_model_template
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Load model
+    # Load model using InferArguments pattern
     logger.info(f'Loading model: {args.model}')
-    model, tokenizer = get_model_tokenizer(
-        args.model,
+
+    # Create InferArguments for model loading
+    infer_args = InferArguments(
+        model=args.model,
         adapters=args.adapters,
-        load_in_8bit=False,
-        device_map='auto',
+        infer_backend='pt',  # Use transformers backend
     )
 
-    # Get template
-    template_type = get_default_template_type(args.model)
-    template = get_template(template_type, tokenizer)
+    # Prepare model and template
+    model, template = prepare_model_template(infer_args)
+
+    # Create inference engine
+    infer_engine = TransformersEngine(model, template=template)
+    logger.info(f'Model loaded: {infer_engine.model_name}')
 
     # Load dataset
     samples = load_vsi_bench_dataset(
@@ -252,7 +257,7 @@ def run_evaluation(args: VSIBenchArguments):
 
     # Run inference
     logger.info('Running inference...')
-    results = run_inference(model, template, samples, args)
+    results = run_inference(infer_engine, samples, args)
 
     # Evaluate
     logger.info('Evaluating results...')

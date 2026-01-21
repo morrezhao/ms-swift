@@ -14,11 +14,7 @@ Usage:
 """
 import argparse
 import os
-import sys
-from typing import Any, Dict, List, Optional
-
-# Add ms-swift to path if running as standalone script
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+from typing import Optional
 
 
 def evaluate_with_swift_infer(
@@ -38,16 +34,21 @@ def evaluate_with_swift_infer(
         output_dir: Output directory for results
     """
     import json
+
     from datasets import load_dataset
 
-    from swift.llm import InferEngine, InferRequest, PtEngine
+    from swift.arguments import InferArguments
+    from swift.infer_engine import InferRequest, RequestConfig, TransformersEngine
     from swift.pipelines.eval.vsi_bench import VSIBenchEvaluator
+    from swift.pipelines.utils import prepare_model_template
 
     os.makedirs(output_dir, exist_ok=True)
 
     # Load model with swift
     print(f'Loading model: {model_name}')
-    engine = PtEngine(model_name)
+    infer_args = InferArguments(model=model_name, infer_backend='pt')
+    model, template = prepare_model_template(infer_args)
+    engine = TransformersEngine(model, template=template)
 
     # Load VSI-Bench dataset
     print('Loading VSI-Bench dataset...')
@@ -60,6 +61,8 @@ def evaluate_with_swift_infer(
     # Prepare evaluator
     evaluator = VSIBenchEvaluator()
     results = []
+
+    request_config = RequestConfig(max_tokens=256, temperature=0.0)
 
     for idx, row in enumerate(dataset):
         sample_id = row.get('id', idx)
@@ -99,15 +102,11 @@ def evaluate_with_swift_infer(
                 images = frame_files
 
         # Create inference request
-        request = InferRequest(messages=[{'role': 'user', 'content': prompt}])
-        if videos:
-            request.videos = videos
-        elif images:
-            request.images = images
+        request = InferRequest(messages=[{'role': 'user', 'content': prompt}], videos=videos, images=images)
 
         # Run inference
         try:
-            response = engine.infer([request])[0]
+            response = engine.infer([request], request_config, use_tqdm=False)[0]
             prediction = response.choices[0].message.content
         except Exception as e:
             print(f'Error on sample {sample_id}: {e}')
@@ -165,7 +164,6 @@ def evaluate_with_api(
         output_dir: Output directory
     """
     import base64
-    import json
 
     import requests
     from datasets import load_dataset
