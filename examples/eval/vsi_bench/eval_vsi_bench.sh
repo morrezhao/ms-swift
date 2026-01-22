@@ -24,7 +24,7 @@ EVAL_LIMIT=100  # Set to empty or remove for full evaluation
 # Step 0: Extract frames from videos (run once, highly recommended)
 # This saves significant time during evaluation by avoiding repeated video decoding
 # ============================================================
-# python extract_frames.py \
+# python examples/eval/vsi_bench/extract_frames.py \
 #     --video_dir ${VIDEO_DIR} \
 #     --output_dir ${FRAMES_DIR} \
 #     --num_frames ${NUM_FRAMES} \
@@ -65,6 +65,9 @@ EVAL_LIMIT=100  # Set to empty or remove for full evaluation
 # Recommended for faster inference with batch processing
 # Use FRAMES_DIR (pre-extracted frames) instead of VIDEO_DIR for faster loading
 # ============================================================
+# Set VLLM_MM_INPUT_CACHE_GIB to increase multimodal cache size (default 4GB)
+# This prevents LRU cache eviction errors when processing many images per batch
+VLLM_MM_INPUT_CACHE_GIB=40 \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m swift.pipelines.eval.run_vsi_bench \
     --model ${MODEL} \
     --infer_backend vllm \
