@@ -50,7 +50,7 @@ EVAL_LIMIT=100  # Set to empty or remove for full evaluation
 
 # ============================================================
 # Option 3: Multiple GPUs with vLLM (tensor parallelism)
-# Recommended for faster inference
+# Recommended for faster inference with batch processing
 # ============================================================
 CUDA_VISIBLE_DEVICES=0,1,2,3 python -m swift.pipelines.eval.run_vsi_bench \
     --model ${MODEL} \
@@ -63,7 +63,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python -m swift.pipelines.eval.run_vsi_bench \
     --eval_limit ${EVAL_LIMIT} \
     --max_new_tokens 2048 \
     --temperature 0.0 \
+    --batch_size 0 \
     --verbose
+# Note: batch_size=0 means process all samples at once (fastest with vLLM)
+# Set batch_size to a smaller value (e.g., 32, 64) if you encounter OOM errors
 
 # ============================================================
 # Option 4: With LoRA adapters

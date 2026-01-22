@@ -48,6 +48,9 @@ class VSIBenchArguments:
     temperature: float = field(default=0.0, metadata={'help': 'Temperature for generation'})
     top_p: float = field(default=1.0, metadata={'help': 'Top-p sampling'})
 
+    # Batch settings
+    batch_size: int = field(default=0, metadata={'help': 'Batch size for inference (0 = all samples at once)'})
+
     # Output settings
     output_dir: str = field(default='./vsi_bench_output', metadata={'help': 'Output directory for results'})
     verbose: bool = field(default=False, metadata={'help': 'Print verbose output'})
@@ -212,18 +215,43 @@ def build_extraction_prompt(sample: Dict[str, Any]) -> str:
         return 'Based on your reasoning above, please provide your final numerical answer only (just the number, no units or explanation).'
 
 
+def _run_batch_inference(
+    infer_engine,
+    requests: List,
+    config,
+    desc: str = 'Inference',
+) -> List:
+    """Run batch inference with error handling.
+
+    Args:
+        infer_engine: Inference engine instance
+        requests: List of InferRequest objects
+        config: RequestConfig for inference
+        desc: Description for progress bar
+
+    Returns:
+        List of responses (None for failed requests)
+    """
+    try:
+        responses = infer_engine.infer(requests, config, use_tqdm=True)
+        return responses
+    except Exception as e:
+        logger.error(f'{desc} failed: {e}')
+        return [None] * len(requests)
+
+
 def run_inference(
     infer_engine,
     samples: List[Dict[str, Any]],
     args: VSIBenchArguments,
 ) -> List[Dict[str, Any]]:
-    """Run inference on VSI-Bench samples using two-round dialogue.
+    """Run batch inference on VSI-Bench samples using two-round dialogue.
 
     Following VSI-Bench paper methodology:
     1. First round: Model sees video + question and generates reasoning
     2. Second round: Ask model to provide final answer in standardized format
 
-    This approach reduces answer extraction errors compared to fuzzy string matching.
+    This implementation uses batch inference for better throughput.
 
     Args:
         infer_engine: Inference engine instance
@@ -233,8 +261,6 @@ def run_inference(
     Returns:
         List of samples with predictions
     """
-    from tqdm import tqdm
-
     from swift.infer_engine import InferRequest, RequestConfig
 
     # Config for first round (reasoning) - allow more tokens
@@ -251,69 +277,112 @@ def run_inference(
         top_p=1.0,
     )
 
-    results = []
-    for i, sample in enumerate(tqdm(samples, desc='Inference', disable=args.verbose)):
-        if args.verbose:
-            logger.info(f'Processing sample {i+1}/{len(samples)}: {sample["id"]}')
+    # Determine batch size
+    batch_size = args.batch_size if args.batch_size > 0 else len(samples)
+    num_batches = (len(samples) + batch_size - 1) // batch_size
 
-        # First round: Get model's reasoning
-        prompt = build_prompt(sample)
-        messages = [{'role': 'user', 'content': prompt}]
+    logger.info(f'Total samples: {len(samples)}, Batch size: {batch_size}, Num batches: {num_batches}')
 
-        # Add video or images
-        videos = []
-        images = []
-        if 'video_path' in sample:
-            videos = [sample['video_path']]
-        elif 'frame_paths' in sample:
-            images = sample['frame_paths']
+    all_results = []
 
-        infer_request = InferRequest(messages=messages, videos=videos, images=images)
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, len(samples))
+        batch_samples = samples[start_idx:end_idx]
 
-        try:
-            # First round inference
-            response_list = infer_engine.infer([infer_request], reasoning_config, use_tqdm=False)
-            response = response_list[0]
-            reasoning_response = response.choices[0].message.content
+        logger.info(f'Processing batch {batch_idx + 1}/{num_batches} (samples {start_idx + 1}-{end_idx})')
 
-            # Second round: Extract final answer
-            # Build multi-turn conversation with model's reasoning
+        # Prepare first round requests for this batch
+        first_round_requests = []
+        sample_media = []
+
+        for sample in batch_samples:
+            prompt = build_prompt(sample)
+            messages = [{'role': 'user', 'content': prompt}]
+
+            videos = []
+            images = []
+            if 'video_path' in sample:
+                videos = [sample['video_path']]
+            elif 'frame_paths' in sample:
+                images = sample['frame_paths']
+
+            first_round_requests.append(InferRequest(messages=messages, videos=videos, images=images))
+            sample_media.append({'videos': videos, 'images': images, 'prompt': prompt})
+
+        # Run first round batch inference
+        logger.info(f'Running first round inference for batch {batch_idx + 1}...')
+        first_round_responses = _run_batch_inference(
+            infer_engine, first_round_requests, reasoning_config, 'First round'
+        )
+
+        # Extract reasoning responses
+        reasoning_responses = []
+        for i, response in enumerate(first_round_responses):
+            try:
+                if response is not None:
+                    reasoning_response = response.choices[0].message.content
+                else:
+                    reasoning_response = ''
+            except Exception as e:
+                logger.warning(f'Failed to extract reasoning for sample {batch_samples[i]["id"]}: {e}')
+                reasoning_response = ''
+            reasoning_responses.append(reasoning_response)
+
+        # Prepare second round requests for this batch
+        second_round_requests = []
+        for i, sample in enumerate(batch_samples):
             extraction_prompt = build_extraction_prompt(sample)
             messages_round2 = [
-                {'role': 'user', 'content': prompt},
-                {'role': 'assistant', 'content': reasoning_response},
+                {'role': 'user', 'content': sample_media[i]['prompt']},
+                {'role': 'assistant', 'content': reasoning_responses[i]},
                 {'role': 'user', 'content': extraction_prompt},
             ]
 
-            infer_request_round2 = InferRequest(messages=messages_round2, videos=videos, images=images)
-            response_list_round2 = infer_engine.infer([infer_request_round2], extraction_config, use_tqdm=False)
-            response_round2 = response_list_round2[0]
-            final_answer = response_round2.choices[0].message.content
+            second_round_requests.append(InferRequest(
+                messages=messages_round2,
+                videos=sample_media[i]['videos'],
+                images=sample_media[i]['images'],
+            ))
 
-        except Exception as e:
-            logger.warning(f'Inference failed for sample {sample["id"]}: {e}')
-            reasoning_response = ''
-            final_answer = ''
+        # Run second round batch inference
+        logger.info(f'Running second round inference for batch {batch_idx + 1}...')
+        second_round_responses = _run_batch_inference(
+            infer_engine, second_round_requests, extraction_config, 'Second round'
+        )
 
-        result = {
-            'id': sample['id'],
-            'question_type': sample['question_type'],
-            'question': sample['question'],
-            'ground_truth': sample['ground_truth'],
-            'prediction': final_answer,  # Use extracted answer for evaluation
-            'is_multiple_choice': sample.get('options') is not None,
-            'raw_response': reasoning_response,  # Keep full reasoning for analysis
-            'extraction_response': final_answer,
-        }
-        results.append(result)
+        # Compile results for this batch
+        for i, sample in enumerate(batch_samples):
+            try:
+                if second_round_responses[i] is not None:
+                    final_answer = second_round_responses[i].choices[0].message.content
+                else:
+                    final_answer = ''
+            except Exception as e:
+                logger.warning(f'Failed to extract final answer for sample {sample["id"]}: {e}')
+                final_answer = ''
 
-        if args.verbose:
-            logger.info(f'  Question: {sample["question"][:100]}...')
-            logger.info(f'  Ground Truth: {sample["ground_truth"]}')
-            logger.info(f'  Reasoning: {reasoning_response[:200]}...')
-            logger.info(f'  Final Answer: {final_answer}')
+            result = {
+                'id': sample['id'],
+                'question_type': sample['question_type'],
+                'question': sample['question'],
+                'ground_truth': sample['ground_truth'],
+                'prediction': final_answer,
+                'is_multiple_choice': sample.get('options') is not None,
+                'raw_response': reasoning_responses[i],
+                'extraction_response': final_answer,
+            }
+            all_results.append(result)
 
-    return results
+            if args.verbose:
+                logger.info(f'Sample {start_idx + i + 1}/{len(samples)}: {sample["id"]}')
+                logger.info(f'  Question: {sample["question"][:100]}...')
+                logger.info(f'  Ground Truth: {sample["ground_truth"]}')
+                logger.info(f'  Reasoning: {reasoning_responses[i][:200]}...' if reasoning_responses[i] else '  Reasoning: (empty)')
+                logger.info(f'  Final Answer: {final_answer}')
+
+    logger.info(f'Inference completed for {len(all_results)} samples')
+    return all_results
 
 
 def run_evaluation(args: VSIBenchArguments):
@@ -412,6 +481,7 @@ def main():
     parser.add_argument('--max_new_tokens', type=int, default=256, help='Maximum new tokens')
     parser.add_argument('--temperature', type=float, default=0.0, help='Temperature')
     parser.add_argument('--top_p', type=float, default=1.0, help='Top-p')
+    parser.add_argument('--batch_size', type=int, default=0, help='Batch size for inference (0 = all samples at once)')
     parser.add_argument('--output_dir', type=str, default='./vsi_bench_output', help='Output directory')
     parser.add_argument('--verbose', action='store_true', help='Verbose output')
 
