@@ -122,9 +122,15 @@ def main():
     parser.add_argument('--video_dir', type=str, required=True, help='Directory containing videos')
     parser.add_argument('--output_dir', type=str, required=True, help='Output directory for frames')
     parser.add_argument('--num_frames', type=int, default=32, help='Number of frames to extract per video')
-    parser.add_argument('--num_workers', type=int, default=8, help='Number of parallel workers')
+    parser.add_argument('--num_workers', type=int, default=None, help='Number of parallel workers (default: min(16, cpu_count))')
     parser.add_argument('--skip_existing', action='store_true', help='Skip videos with existing frames')
     args = parser.parse_args()
+
+    # Auto-detect number of CPUs if not specified, with reasonable limit
+    if args.num_workers is None:
+        cpu_count = os.cpu_count() or 8
+        args.num_workers = min(16, cpu_count)  # Cap at 16 to avoid resource issues
+        print(f'Using {args.num_workers} workers (auto-detected, cpu_count={cpu_count})')
 
     # Find all videos
     print(f'Searching for videos in {args.video_dir}...')
@@ -159,19 +165,42 @@ def main():
     fail_count = 0
     failed_videos = []
 
-    with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-        futures = {
-            executor.submit(extract_frames_from_video, video, output, args.num_frames): video
-            for video, output, _ in tasks
-        }
-
-        for future in tqdm(as_completed(futures), total=len(futures), desc='Extracting frames'):
-            video_path, success, message = future.result()
+    if args.num_workers == 1:
+        # Sequential processing
+        for video, output, num_frames in tqdm(tasks, desc='Extracting frames'):
+            video_path, success, message = extract_frames_from_video(video, output, num_frames)
             if success:
                 success_count += 1
             else:
                 fail_count += 1
                 failed_videos.append((video_path, message))
+    else:
+        # Parallel processing
+        try:
+            with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+                futures = {
+                    executor.submit(extract_frames_from_video, video, output, args.num_frames): video
+                    for video, output, _ in tasks
+                }
+
+                for future in tqdm(as_completed(futures), total=len(futures), desc='Extracting frames'):
+                    try:
+                        video_path, success, message = future.result()
+                        if success:
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                            failed_videos.append((video_path, message))
+                    except Exception as e:
+                        fail_count += 1
+                        failed_videos.append((futures[future], str(e)))
+
+        except OSError as e:
+            if 'Resource temporarily unavailable' in str(e) or 'Cannot allocate memory' in str(e):
+                print(f'\nError: Too many parallel processes (num_workers={args.num_workers})')
+                print('Try: --num_workers 8  or  --num_workers 4  or  --num_workers 1')
+                return
+            raise
 
     # Print summary
     print(f'\nExtraction complete!')

@@ -28,8 +28,8 @@ EVAL_LIMIT=100  # Set to empty or remove for full evaluation
 #     --video_dir ${VIDEO_DIR} \
 #     --output_dir ${FRAMES_DIR} \
 #     --num_frames ${NUM_FRAMES} \
-#     --num_workers 16 \
 #     --skip_existing
+# Note: By default, uses all available CPUs. Use --num_workers N to limit.
 
 # ============================================================
 # Option 1: Single GPU with Transformers backend (default)

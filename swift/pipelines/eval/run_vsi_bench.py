@@ -330,6 +330,10 @@ def run_inference(
             reasoning_responses.append(reasoning_response)
 
         # Prepare second round requests for this batch
+        # Note: For the second round, we don't pass videos/images again.
+        # In multi-turn conversations, the model already has the visual context
+        # from the first turn. Sending them again can cause issues with vLLM's
+        # multimodal cache (mm_hash assertion errors).
         second_round_requests = []
         for i, sample in enumerate(batch_samples):
             extraction_prompt = build_extraction_prompt(sample)
@@ -341,8 +345,8 @@ def run_inference(
 
             second_round_requests.append(InferRequest(
                 messages=messages_round2,
-                videos=sample_media[i]['videos'],
-                images=sample_media[i]['images'],
+                videos=[],
+                images=[],
             ))
 
         # Run second round batch inference
