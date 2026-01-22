@@ -129,16 +129,22 @@ def extract_choice_answer(response: str) -> Optional[str]:
     return None
 
 
-def compute_mra(predictions: List[float], ground_truths: List[float], threshold: float = 1.0) -> float:
+def compute_mra(predictions: List[float], ground_truths: List[float], thresholds: Optional[List[float]] = None) -> float:
     """Compute Mean Relative Accuracy (MRA) for numerical answers.
 
-    MRA is defined as:
-    MRA = (1/N) * sum(max(0, 1 - |pred - gt| / max(threshold, |gt|)))
+    MRA is defined as per VSI-Bench paper (Thinking in Space):
+    For confidence thresholds C = {0.5, 0.55, ..., 0.95} (10 thresholds),
+    MRA = (1/|C|) * sum_{theta in C} 1(|pred - gt| / gt < 1 - theta)
+
+    This means for each sample:
+    - theta=0.5: relative error must be < 50% to score 1
+    - theta=0.95: relative error must be < 5% to score 1
+    - Average over all thresholds gives the sample's MRA score
 
     Args:
         predictions: List of predicted numeric values
         ground_truths: List of ground truth numeric values
-        threshold: Minimum denominator to avoid division issues (default: 1.0)
+        thresholds: List of confidence thresholds (default: [0.5, 0.55, ..., 0.95])
 
     Returns:
         MRA score between 0 and 1
@@ -149,6 +155,10 @@ def compute_mra(predictions: List[float], ground_truths: List[float], threshold:
     if len(predictions) == 0:
         return 0.0
 
+    # Default thresholds from VSI-Bench paper
+    if thresholds is None:
+        thresholds = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+
     scores = []
     for pred, gt in zip(predictions, ground_truths):
         if pred is None or gt is None:
@@ -158,10 +168,34 @@ def compute_mra(predictions: List[float], ground_truths: List[float], threshold:
         try:
             pred = float(pred)
             gt = float(gt)
-            denominator = max(threshold, abs(gt))
-            relative_error = abs(pred - gt) / denominator
-            score = max(0.0, 1.0 - relative_error)
-            scores.append(score)
+
+            if gt == 0:
+                # Handle zero ground truth case
+                # If both are zero, perfect match
+                if pred == 0:
+                    scores.append(1.0)
+                else:
+                    scores.append(0.0)
+                continue
+
+            # Compute relative error: |pred - gt| / |gt|
+            relative_error = abs(pred - gt) / abs(gt)
+
+            # For each threshold theta, check if relative_error < (1 - theta)
+            # theta=0.5 -> tolerance=0.5 (50% error allowed)
+            # theta=0.95 -> tolerance=0.05 (5% error allowed)
+            threshold_scores = []
+            for theta in thresholds:
+                tolerance = 1.0 - theta
+                if relative_error < tolerance:
+                    threshold_scores.append(1.0)
+                else:
+                    threshold_scores.append(0.0)
+
+            # Average over all thresholds for this sample
+            sample_score = np.mean(threshold_scores)
+            scores.append(sample_score)
+
         except (ValueError, TypeError):
             scores.append(0.0)
 
@@ -203,13 +237,14 @@ class VSIBenchEvaluator:
     computing appropriate metrics for each question type.
     """
 
-    def __init__(self, mra_threshold: float = 1.0):
+    def __init__(self, mra_thresholds: Optional[List[float]] = None):
         """Initialize the evaluator.
 
         Args:
-            mra_threshold: Threshold for MRA computation
+            mra_thresholds: List of confidence thresholds for MRA computation
+                           (default: [0.5, 0.55, ..., 0.95] as per VSI-Bench paper)
         """
-        self.mra_threshold = mra_threshold
+        self.mra_thresholds = mra_thresholds
         self.results: List[Dict[str, Any]] = []
 
     def add_prediction(
@@ -271,7 +306,7 @@ class VSIBenchEvaluator:
         if na_results:
             na_preds = [extract_numeric_answer(r['prediction']) for r in na_results]
             na_gts = [extract_numeric_answer(r['ground_truth']) for r in na_results]
-            na_mra = compute_mra(na_preds, na_gts, self.mra_threshold)
+            na_mra = compute_mra(na_preds, na_gts, self.mra_thresholds)
 
         # Compute overall score (weighted average based on sample count)
         total = len(self.results)
@@ -297,7 +332,7 @@ class VSIBenchEvaluator:
             if qt_na:
                 preds = [extract_numeric_answer(r['prediction']) for r in qt_na]
                 gts = [extract_numeric_answer(r['ground_truth']) for r in qt_na]
-                qt_metrics['na_mra'] = compute_mra(preds, gts, self.mra_threshold)
+                qt_metrics['na_mra'] = compute_mra(preds, gts, self.mra_thresholds)
                 qt_metrics['na_count'] = len(qt_na)
 
             by_question_type[qt] = qt_metrics
@@ -357,7 +392,7 @@ class VSIBenchEvaluator:
 
 def evaluate_vsi_bench(
     predictions: List[Dict[str, Any]],
-    mra_threshold: float = 1.0,
+    mra_thresholds: Optional[List[float]] = None,
     output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Convenience function to evaluate VSI-Bench predictions.
@@ -369,13 +404,14 @@ def evaluate_vsi_bench(
             - prediction: Model's prediction
             - ground_truth: Ground truth answer
             - is_multiple_choice: Whether it's a multiple-choice question
-        mra_threshold: Threshold for MRA computation
+        mra_thresholds: List of confidence thresholds for MRA computation
+                        (default: [0.5, 0.55, ..., 0.95] as per VSI-Bench paper)
         output_path: Optional path to save detailed results
 
     Returns:
         Evaluation metrics dictionary
     """
-    evaluator = VSIBenchEvaluator(mra_threshold=mra_threshold)
+    evaluator = VSIBenchEvaluator(mra_thresholds=mra_thresholds)
 
     for pred in predictions:
         evaluator.add_prediction(

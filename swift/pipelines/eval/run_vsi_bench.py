@@ -167,7 +167,9 @@ def load_vsi_bench_dataset(
 
 
 def build_prompt(sample: Dict[str, Any]) -> str:
-    """Build prompt for a VSI-Bench sample.
+    """Build prompt for a VSI-Bench sample (first round).
+
+    This is the first round where the model can freely reason about the question.
 
     Args:
         sample: Sample dictionary
@@ -181,13 +183,33 @@ def build_prompt(sample: Dict[str, Any]) -> str:
     if options:
         # Multiple-choice question
         prompt = question + '\n' + '\n'.join(options)
-        prompt += '\n\nPlease answer with just the letter (A, B, C, or D).'
     else:
         # Numerical answer question
         prompt = question
-        prompt += '\n\nPlease provide the numerical answer only.'
 
     return prompt
+
+
+def build_extraction_prompt(sample: Dict[str, Any]) -> str:
+    """Build the second-round prompt to extract the final answer.
+
+    Following VSI-Bench paper methodology: after the model gives its reasoning,
+    we ask it to provide the final answer in a standardized format.
+
+    Args:
+        sample: Sample dictionary
+
+    Returns:
+        Extraction prompt string
+    """
+    options = sample.get('options')
+
+    if options:
+        # Multiple-choice: ask for just the letter
+        return 'Based on your reasoning above, please provide your final answer as a single letter (A, B, C, or D) only.'
+    else:
+        # Numerical: ask for just the number
+        return 'Based on your reasoning above, please provide your final numerical answer only (just the number, no units or explanation).'
 
 
 def run_inference(
@@ -195,7 +217,13 @@ def run_inference(
     samples: List[Dict[str, Any]],
     args: VSIBenchArguments,
 ) -> List[Dict[str, Any]]:
-    """Run inference on VSI-Bench samples.
+    """Run inference on VSI-Bench samples using two-round dialogue.
+
+    Following VSI-Bench paper methodology:
+    1. First round: Model sees video + question and generates reasoning
+    2. Second round: Ask model to provide final answer in standardized format
+
+    This approach reduces answer extraction errors compared to fuzzy string matching.
 
     Args:
         infer_engine: Inference engine instance
@@ -209,10 +237,18 @@ def run_inference(
 
     from swift.infer_engine import InferRequest, RequestConfig
 
-    request_config = RequestConfig(
+    # Config for first round (reasoning) - allow more tokens
+    reasoning_config = RequestConfig(
         max_tokens=args.max_new_tokens,
         temperature=args.temperature,
         top_p=args.top_p,
+    )
+
+    # Config for second round (extraction) - shorter response
+    extraction_config = RequestConfig(
+        max_tokens=64,
+        temperature=0.0,  # Use greedy decoding for extraction
+        top_p=1.0,
     )
 
     results = []
@@ -220,9 +256,8 @@ def run_inference(
         if args.verbose:
             logger.info(f'Processing sample {i+1}/{len(samples)}: {sample["id"]}')
 
+        # First round: Get model's reasoning
         prompt = build_prompt(sample)
-
-        # Prepare request
         messages = [{'role': 'user', 'content': prompt}]
 
         # Add video or images
@@ -235,30 +270,48 @@ def run_inference(
 
         infer_request = InferRequest(messages=messages, videos=videos, images=images)
 
-        # Run inference
         try:
-            response_list = infer_engine.infer([infer_request], request_config, use_tqdm=False)
+            # First round inference
+            response_list = infer_engine.infer([infer_request], reasoning_config, use_tqdm=False)
             response = response_list[0]
-            prediction = response.choices[0].message.content
+            reasoning_response = response.choices[0].message.content
+
+            # Second round: Extract final answer
+            # Build multi-turn conversation with model's reasoning
+            extraction_prompt = build_extraction_prompt(sample)
+            messages_round2 = [
+                {'role': 'user', 'content': prompt},
+                {'role': 'assistant', 'content': reasoning_response},
+                {'role': 'user', 'content': extraction_prompt},
+            ]
+
+            infer_request_round2 = InferRequest(messages=messages_round2, videos=videos, images=images)
+            response_list_round2 = infer_engine.infer([infer_request_round2], extraction_config, use_tqdm=False)
+            response_round2 = response_list_round2[0]
+            final_answer = response_round2.choices[0].message.content
+
         except Exception as e:
             logger.warning(f'Inference failed for sample {sample["id"]}: {e}')
-            prediction = ''
+            reasoning_response = ''
+            final_answer = ''
 
         result = {
             'id': sample['id'],
             'question_type': sample['question_type'],
             'question': sample['question'],
             'ground_truth': sample['ground_truth'],
-            'prediction': prediction,
+            'prediction': final_answer,  # Use extracted answer for evaluation
             'is_multiple_choice': sample.get('options') is not None,
-            'raw_response': prediction,
+            'raw_response': reasoning_response,  # Keep full reasoning for analysis
+            'extraction_response': final_answer,
         }
         results.append(result)
 
         if args.verbose:
             logger.info(f'  Question: {sample["question"][:100]}...')
             logger.info(f'  Ground Truth: {sample["ground_truth"]}')
-            logger.info(f'  Prediction: {prediction}')
+            logger.info(f'  Reasoning: {reasoning_response[:200]}...')
+            logger.info(f'  Final Answer: {final_answer}')
 
     return results
 
