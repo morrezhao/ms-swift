@@ -13,8 +13,8 @@
 # Configuration
 MODEL_NAME="Qwen3-VL-32B-Instruct"
 MODEL="/upfs/models/Qwen/${MODEL_NAME}"
-VIDEO_DIR="/upfs/enhan/data/nyu_visionx/VSI-Bench"
-DATA_PATH="/upfs/enhan/data/nyu_visionx/VSI-Bench/test.jsonl"  # Local dataset file (JSON/JSONL)
+VIDEO_DIR="/upfs/enhan/data/nyu-visionx/VSI-Bench"
+DATA_PATH="/upfs/enhan/data/nyu-visionx/VSI-Bench/test.jsonl"  # Local dataset file (JSON/JSONL)
 OUTPUT_DIR="/upfs/enhan/vsi_bench_output/${MODEL_NAME}"
 NUM_FRAMES=32
 EVAL_LIMIT=100  # Set to empty or remove for full evaluation
@@ -52,10 +52,10 @@ EVAL_LIMIT=100  # Set to empty or remove for full evaluation
 # Option 3: Multiple GPUs with vLLM (tensor parallelism)
 # Recommended for faster inference with batch processing
 # ============================================================
-CUDA_VISIBLE_DEVICES=0,1,2,3 python -m swift.pipelines.eval.run_vsi_bench \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m swift.pipelines.eval.run_vsi_bench \
     --model ${MODEL} \
     --infer_backend vllm \
-    --tensor_parallel_size 4 \
+    --tensor_parallel_size 8 \
     --data_path ${DATA_PATH} \
     --video_dir ${VIDEO_DIR} \
     --num_frames ${NUM_FRAMES} \
@@ -63,8 +63,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python -m swift.pipelines.eval.run_vsi_bench \
     --eval_limit ${EVAL_LIMIT} \
     --max_new_tokens 2048 \
     --temperature 0.0 \
-    --batch_size 0 \
-    --verbose
+    --batch_size 64 \
 # Note: batch_size=0 means process all samples at once (fastest with vLLM)
 # Set batch_size to a smaller value (e.g., 32, 64) if you encounter OOM errors
 
