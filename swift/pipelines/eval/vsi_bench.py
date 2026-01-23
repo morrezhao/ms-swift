@@ -33,18 +33,21 @@ from swift.utils import get_logger
 
 logger = get_logger()
 
-# Question type categories
+# Question type categories (following official VSI-Bench evaluation)
 NUMERIC_QUESTION_TYPES = {
     'object_abs_distance',
-    'object_size_estimate',
-    'room_size_estimate',  # Can be numeric
+    'object_counting',
+    'object_size_estimation',
+    'room_size_estimation',
 }
 
 MULTIPLE_CHOICE_QUESTION_TYPES = {
-    'object_rel_direction_hard',
     'object_rel_direction_easy',
-    'counting',
-    'appearance_order',
+    'object_rel_direction_medium',
+    'object_rel_direction_hard',
+    'object_rel_distance',
+    'route_planning',
+    'obj_appearance_order',
 }
 
 # All question types
@@ -53,6 +56,10 @@ ALL_QUESTION_TYPES = NUMERIC_QUESTION_TYPES | MULTIPLE_CHOICE_QUESTION_TYPES
 
 def extract_numeric_answer(response: str) -> Optional[float]:
     """Extract a numeric answer from model response.
+
+    Following official VSI-Bench: extract the first word from the prediction,
+    then try to convert it to a number. If that fails, search for the first
+    number in the full response.
 
     Args:
         response: Model's response string
@@ -64,69 +71,51 @@ def extract_numeric_answer(response: str) -> Optional[float]:
         return None
 
     response = response.strip()
+    if not response:
+        return None
 
-    # Try to extract number directly
-    # Match patterns like: "1.9", "1.9 meters", "approximately 1.9", etc.
-    patterns = [
-        r'[-+]?\d*\.?\d+',  # Basic number pattern
-        r'(\d+(?:\.\d+)?)\s*(?:m|meters?|cm|centimeters?)?',  # With units
-        r'(?:approximately|about|around|roughly)?\s*([-+]?\d*\.?\d+)',  # With qualifiers
-    ]
+    # Official VSI-Bench: pred.split(' ')[0].rstrip('.').strip()
+    first_word = response.split(' ')[0].rstrip('.').strip()
 
-    for pattern in patterns:
-        matches = re.findall(pattern, response, re.IGNORECASE)
-        if matches:
-            try:
-                # Take the first valid number found
-                for match in matches:
-                    if isinstance(match, tuple):
-                        match = match[0] if match[0] else match[1] if len(match) > 1 else None
-                    if match:
-                        return float(match)
-            except (ValueError, TypeError):
-                continue
+    # Try to convert the first word to a number
+    try:
+        return float(first_word)
+    except (ValueError, TypeError):
+        pass
+
+    # Fallback: find first number in the response
+    match = re.search(r'[-+]?\d*\.?\d+', response)
+    if match:
+        try:
+            return float(match.group())
+        except (ValueError, TypeError):
+            pass
 
     return None
 
 
 def extract_choice_answer(response: str) -> Optional[str]:
-    """Extract a multiple-choice answer (A, B, C, D) from model response.
+    """Extract a multiple-choice answer from model response.
+
+    Following official VSI-Bench evaluation: extract the first word
+    from the prediction and use it as the answer.
 
     Args:
         response: Model's response string
 
     Returns:
-        Extracted choice letter or None if not found
+        Extracted answer string or None if not found
     """
     if response is None:
         return None
 
-    response = response.strip().upper()
+    response = response.strip()
+    if not response:
+        return None
 
-    # Direct match for single letter
-    if response in ['A', 'B', 'C', 'D']:
-        return response
-
-    # Match patterns like "A.", "A)", "(A)", "Answer: A", etc.
-    patterns = [
-        r'^([A-D])\s*[\.\)\:]',  # A. or A) or A:
-        r'\(([A-D])\)',  # (A)
-        r'(?:answer|choice|option)[\s:]*([A-D])',  # Answer: A
-        r'^([A-D])(?:\s|$)',  # A at start
-        r'(?:^|\s)([A-D])(?:\s|$)',  # Standalone A
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, response, re.IGNORECASE)
-        if match:
-            return match.group(1).upper()
-
-    # Check if response starts with an option text
-    for letter in ['A', 'B', 'C', 'D']:
-        if response.startswith(letter + '.') or response.startswith(letter + ' '):
-            return letter
-
-    return None
+    # Official VSI-Bench: pred.split(' ')[0].rstrip('.').strip()
+    answer = response.split(' ')[0].rstrip('.').strip()
+    return answer if answer else None
 
 
 def compute_mra(predictions: List[float], ground_truths: List[float], thresholds: Optional[List[float]] = None) -> float:
@@ -205,9 +194,11 @@ def compute_mra(predictions: List[float], ground_truths: List[float], thresholds
 def compute_accuracy(predictions: List[str], ground_truths: List[str]) -> float:
     """Compute accuracy for multiple-choice answers.
 
+    Following official VSI-Bench: case-insensitive exact match.
+
     Args:
-        predictions: List of predicted choices (A, B, C, D)
-        ground_truths: List of ground truth choices
+        predictions: List of predicted answers
+        ground_truths: List of ground truth answers
 
     Returns:
         Accuracy score between 0 and 1
@@ -221,10 +212,7 @@ def compute_accuracy(predictions: List[str], ground_truths: List[str]) -> float:
     correct = 0
     for pred, gt in zip(predictions, ground_truths):
         if pred is not None and gt is not None:
-            # Normalize both to uppercase single letter
-            pred_norm = pred.strip().upper()[:1] if pred else ''
-            gt_norm = gt.strip().upper()[:1] if gt else ''
-            if pred_norm == gt_norm:
+            if pred.lower() == gt.lower():
                 correct += 1
 
     return correct / len(predictions)
@@ -275,6 +263,14 @@ class VSIBenchEvaluator:
             'raw_response': raw_response,
         })
 
+    def _is_mca(self, result: Dict[str, Any]) -> bool:
+        """Determine if a result is MCA based on question_type.
+
+        Following official VSI-Bench: classification is based on question_type,
+        not on presence of options in the data.
+        """
+        return result['question_type'] in MULTIPLE_CHOICE_QUESTION_TYPES
+
     def evaluate(self) -> Dict[str, Any]:
         """Evaluate all predictions and compute metrics.
 
@@ -284,21 +280,20 @@ class VSIBenchEvaluator:
             - mca_accuracy: Accuracy for multiple-choice questions
             - na_mra: MRA for numerical answer questions
             - by_question_type: Metrics broken down by question type
-            - by_dataset: Metrics broken down by source dataset
         """
         if not self.results:
             logger.warning('No results to evaluate')
             return {}
 
-        # Separate results by answer type
-        mca_results = [r for r in self.results if r['is_multiple_choice']]
-        na_results = [r for r in self.results if not r['is_multiple_choice']]
+        # Separate results by question_type (following official evaluation)
+        mca_results = [r for r in self.results if self._is_mca(r)]
+        na_results = [r for r in self.results if not self._is_mca(r)]
 
         # Compute MCA accuracy
         mca_accuracy = 0.0
         if mca_results:
             mca_preds = [extract_choice_answer(r['prediction']) for r in mca_results]
-            mca_gts = [r['ground_truth'] for r in mca_results]
+            mca_gts = [extract_choice_answer(r['ground_truth']) for r in mca_results]
             mca_accuracy = compute_accuracy(mca_preds, mca_gts)
 
         # Compute NA MRA
@@ -318,22 +313,20 @@ class VSIBenchEvaluator:
         by_question_type = {}
         for qt in set(r['question_type'] for r in self.results):
             qt_results = [r for r in self.results if r['question_type'] == qt]
-            qt_mca = [r for r in qt_results if r['is_multiple_choice']]
-            qt_na = [r for r in qt_results if not r['is_multiple_choice']]
+            is_mca_type = qt in MULTIPLE_CHOICE_QUESTION_TYPES
 
             qt_metrics = {'count': len(qt_results)}
 
-            if qt_mca:
-                preds = [extract_choice_answer(r['prediction']) for r in qt_mca]
-                gts = [r['ground_truth'] for r in qt_mca]
+            if is_mca_type:
+                preds = [extract_choice_answer(r['prediction']) for r in qt_results]
+                gts = [extract_choice_answer(r['ground_truth']) for r in qt_results]
                 qt_metrics['mca_accuracy'] = compute_accuracy(preds, gts)
-                qt_metrics['mca_count'] = len(qt_mca)
-
-            if qt_na:
-                preds = [extract_numeric_answer(r['prediction']) for r in qt_na]
-                gts = [extract_numeric_answer(r['ground_truth']) for r in qt_na]
+                qt_metrics['mca_count'] = len(qt_results)
+            else:
+                preds = [extract_numeric_answer(r['prediction']) for r in qt_results]
+                gts = [extract_numeric_answer(r['ground_truth']) for r in qt_results]
                 qt_metrics['na_mra'] = compute_mra(preds, gts, self.mra_thresholds)
-                qt_metrics['na_count'] = len(qt_na)
+                qt_metrics['na_count'] = len(qt_results)
 
             by_question_type[qt] = qt_metrics
 
