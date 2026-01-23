@@ -78,7 +78,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m swift.pipelines.eval.run_vsi_benc
     --output_dir ${OUTPUT_DIR} \
     --max_new_tokens 2048 \
     --temperature 0.0 \
-    --batch_size 64
+    --batch_size 64 \
+    --simple_prompt
 # Note:
 # - Use FRAMES_DIR for pre-extracted frames (faster) or VIDEO_DIR for raw videos
 # - batch_size=0 means process all samples at once (fastest with vLLM)
