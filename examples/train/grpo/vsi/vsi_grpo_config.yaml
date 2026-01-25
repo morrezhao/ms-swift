@@ -1,0 +1,110 @@
+# VSI-Bench GRPO Training Configuration for Qwen3-VL
+#
+# This config trains Qwen3-VL on VSI-Bench spatial reasoning data using GRPO.
+#
+# Usage:
+#   swift rlhf --config examples/train/grpo/vsi/vsi_grpo_config.yaml
+#
+# Before running:
+# 1. Update dataset path to your train_formatted.json
+# 2. Update frames_dir to your pre-extracted frames directory
+# 3. Start vLLM server if using server mode
+
+# ============================================================
+# Model Configuration
+# ============================================================
+model: Qwen/Qwen3-VL-8B-Instruct
+torch_dtype: bfloat16
+
+# ============================================================
+# RLHF/GRPO Configuration
+# ============================================================
+rlhf_type: grpo
+
+# Reward function configuration
+external_plugins:
+  - examples/train/grpo/vsi/vsi_reward.py
+reward_funcs:
+  - vsi_reward
+  - format       # Reward for correct <think>...</think><answer>...</answer> format
+
+# GRPO hyperparameters
+beta: 0.001                    # KL penalty coefficient
+num_generations: 8             # Number of generations per prompt
+num_iterations: 1              # Number of policy updates per rollout
+temperature: 1.0               # Sampling temperature for generation
+max_completion_length: 2048    # Max tokens for model response (increased for CoT)
+
+# CoT System Prompt
+system: examples/train/grpo/vsi/vsi_cot_prompt.txt
+
+# ============================================================
+# Dataset Configuration
+# ============================================================
+# Update this path to your VSI training data
+dataset: /path/to/vsi_data/train_formatted.json
+load_from_cache_file: true
+
+# ============================================================
+# LoRA Configuration
+# ============================================================
+tuner_type: lora
+lora_rank: 64
+lora_alpha: 128
+lora_dropout: 0.05
+# Target modules for Qwen3-VL
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+# ============================================================
+# vLLM Configuration
+# ============================================================
+use_vllm: true
+vllm_mode: colocate           # Use 'server' for external vLLM server
+vllm_gpu_memory_utilization: 0.5
+vllm_tensor_parallel_size: 4
+sleep_level: 1                # Memory optimization level
+
+# For server mode, uncomment:
+# vllm_mode: server
+# vllm_server_host: 127.0.0.1
+# vllm_server_port: 8000
+
+# ============================================================
+# Training Configuration
+# ============================================================
+num_train_epochs: 1
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-6
+warmup_ratio: 0.05
+max_grad_norm: 1.0
+dataloader_num_workers: 4
+
+# ============================================================
+# Checkpointing and Logging
+# ============================================================
+output_dir: output/vsi_grpo
+save_strategy: steps
+save_steps: 500
+save_total_limit: 5
+eval_strategy: steps
+eval_steps: 500
+logging_steps: 1
+log_completions: true
+
+# Optional: WandB logging
+# report_to: wandb
+
+# ============================================================
+# DeepSpeed Configuration (optional)
+# ============================================================
+# Uncomment for multi-GPU training with DeepSpeed
+# deepspeed: zero2
