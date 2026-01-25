@@ -11,7 +11,7 @@
 #   bash eval_vsi_bench.sh
 
 # Configuration
-MODEL_NAME="Qwen3-VL-32B-Instruct"
+MODEL_NAME="Qwen3-VL-8B-Instruct"
 MODEL="/upfs/models/Qwen/${MODEL_NAME}"
 VIDEO_DIR="/upfs/enhan/data/nyu-visionx/VSI-Bench"
 FRAMES_DIR="/upfs/enhan/data/nyu-visionx/VSI-Bench-frames"  # Pre-extracted frames (faster)
@@ -76,9 +76,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m swift.pipelines.eval.run_vsi_benc
     --video_dir ${FRAMES_DIR} \
     --num_frames ${NUM_FRAMES} \
     --output_dir ${OUTPUT_DIR} \
-    --max_new_tokens 2048 \
+    --max_new_tokens 256 \
     --temperature 0.0 \
-    --batch_size 128 \
+    --batch_size 256 \
     --simple_prompt
 # Note:
 # - Use FRAMES_DIR for pre-extracted frames (faster) or VIDEO_DIR for raw videos
