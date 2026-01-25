@@ -112,7 +112,8 @@ class SwiftMixin:
         self.model_meta = model.model_meta
         self.model_info = model.model_info
 
-        data_collator = self._get_data_collator(args, template)
+        # Use data_collator from kwargs if already set (e.g., by GRPO trainer), otherwise create one
+        data_collator = kwargs.pop('data_collator', None) or self._get_data_collator(args, template)
         kwargs.update(self.create_loss_and_eval_metric(args))
         trainer_parameters = inspect.signature(HfTrainer.__init__).parameters
         tokenizer_key = 'processing_class' if 'processing_class' in trainer_parameters else 'tokenizer'
