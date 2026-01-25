@@ -60,6 +60,10 @@ class RLHFTrainerMixin:
     def create_loss_and_metric(self, args):
         return {}
 
+    def create_loss_and_eval_metric(self, args):
+        # RLHF trainers handle loss computation internally, skip loss_map lookup
+        return {}
+
     def _prepare_inputs(self, inputs):
         inputs = super()._prepare_inputs(inputs)
         if self.template.sequence_parallel_size > 1:
