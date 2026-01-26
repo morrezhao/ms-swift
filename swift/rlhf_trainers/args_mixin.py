@@ -27,6 +27,8 @@ class VllmArguments:
         vllm_reasoning_parser (Optional[str]): The reasoning parser for vLLM. Default is None.
         vllm_disable_cascade_attn (bool): Flag to disable cascade attention. Default is False.
         vllm_mm_processor_cache_gb (Optional[float]): MM processor cache size in GB. Default is None.
+        vllm_disable_mm_preprocessor_cache (bool): Flag to disable multimodal preprocessor cache. When True, sets
+            mm_processor_cache_gb=0 to prevent LRU cache eviction issues with large multimodal batches. Default is False.
         vllm_speculative_config (Optional[Union[dict, str]]): Speculative decoding configuration, passed in as a JSON
             string. Defaults to None.
         vllm_engine_kwargs (Optional[Union[dict, str]]): Additional parameters for vllm, formatted as a JSON string.
@@ -50,6 +52,7 @@ class VllmArguments:
     vllm_reasoning_parser: Optional[str] = None
     vllm_disable_cascade_attn: bool = False
     vllm_mm_processor_cache_gb: Optional[float] = None
+    vllm_disable_mm_preprocessor_cache: bool = False  # Set to True to disable mm preprocessor cache (equivalent to mm_processor_cache_gb=0)
     vllm_speculative_config: Optional[Union[dict, str]] = None
     vllm_engine_kwargs: Optional[Union[dict, str]] = None
     # rollout
@@ -85,7 +88,7 @@ class VllmArguments:
             'quantization': self.vllm_quantization,
             'reasoning_parser': self.vllm_reasoning_parser,
             'disable_cascade_attn': self.vllm_disable_cascade_attn,
-            'mm_processor_cache_gb': self.vllm_mm_processor_cache_gb,
+            'mm_processor_cache_gb': 0 if self.vllm_disable_mm_preprocessor_cache else self.vllm_mm_processor_cache_gb,
             'speculative_config': self.vllm_speculative_config,
             'num_labels': self.num_labels,
             'engine_kwargs': self.vllm_engine_kwargs,

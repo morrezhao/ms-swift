@@ -53,7 +53,6 @@ CUDA_VISIBLE_DEVICES=6,7 swift rollout \
 
 until ss -lnt | grep -q ":8000"; do sleep 1; done
 # Then run training:
-VLLM_MM_INPUT_CACHE_GIB=20 \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
 NPROC_PER_NODE=6 \
 swift rlhf \
@@ -65,6 +64,7 @@ swift rlhf \
     --vllm_mode server \
     --vllm_server_host 127.0.0.1 \
     --vllm_server_port 8000 \
+    --vllm_disable_mm_preprocessor_cache true \
     --tuner_type lora \
     --torch_dtype bfloat16 \
     --dataset ${DATASET_PATH} \
