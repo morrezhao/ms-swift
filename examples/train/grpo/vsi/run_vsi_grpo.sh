@@ -15,8 +15,8 @@
 # Configuration - Modify these paths for your environment
 # ============================================================
 MODEL="/upfs/models/Qwen/Qwen3-VL-8B-Instruct"
-DATASET_PATH="/upfs/enhan/code/ms-swift/vsi_data/processed/scannet.json"  # Your VSI training data
-FRAMES_DIR="/upfs/enhan/data/processed_data/ScanNet/color/train"                  # Pre-extracted frames directory
+DATASET_PATH="/upfs/enhan/code/ms-swift/vsi_data/processed/combined_train.json"  # Combined VSI training data (all 3 datasets)
+# FRAMES_DIR is no longer needed - preprocessed data already has absolute image paths
 OUTPUT_DIR="output/vsi_grpo"
 NUM_FRAMES=32
 
