@@ -59,7 +59,8 @@ swift rlhf \
     --rlhf_type grpo \
     --model ${MODEL} \
     --external_plugins examples/train/grpo/vsi/vsi_reward.py \
-    --reward_funcs vsi_reward \
+    --reward_funcs vsi_reward format \
+    --system ${SYSTEM_PROMPT} \
     --use_vllm true \
     --vllm_mode server \
     --vllm_server_host 127.0.0.1 \
