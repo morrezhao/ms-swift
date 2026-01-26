@@ -25,8 +25,8 @@ LEARNING_RATE=1e-6
 BETA=0.001
 NUM_GENERATIONS=8
 MAX_COMPLETION_LENGTH=1024
-BATCH_SIZE=4
-GRADIENT_ACCUMULATION=2
+BATCH_SIZE=16
+GRADIENT_ACCUMULATION=1
 NUM_EPOCHS=1
 # Global batch size = BATCH_SIZE × GRADIENT_ACCUMULATION × NUM_GPUS = 16 × 1 × 8 = 128
 
@@ -49,6 +49,7 @@ export MAX_PIXELS=200704  # ~256*28*28
 CUDA_VISIBLE_DEVICES=6,7 swift rollout \
     --model ${MODEL} \
     --vllm_data_parallel_size 2 \
+    --vllm_disable_mm_preprocessor_cache true \
     --port 8000 &
 
 until ss -lnt | grep -q ":8000"; do sleep 1; done

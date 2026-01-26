@@ -250,7 +250,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                 seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
                 disable_cascade_attn=args.vllm_disable_cascade_attn,
                 load_format=load_format,
-                mm_processor_cache_gb=args.vllm_mm_processor_cache_gb,
+                mm_processor_cache_gb=0 if getattr(args, 'vllm_disable_mm_preprocessor_cache', False) else args.vllm_mm_processor_cache_gb,
                 template=vllm_template,
                 distributed_executor_backend='external_launcher',
                 engine_kwargs=vllm_engine_kwargs,
