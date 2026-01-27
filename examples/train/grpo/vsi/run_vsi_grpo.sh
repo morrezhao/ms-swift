@@ -29,7 +29,7 @@ EVAL_BATCH_SIZE=8
 LEARNING_RATE=1e-6
 BETA=0.001
 NUM_GENERATIONS=8
-MAX_COMPLETION_LENGTH=1024
+MAX_COMPLETION_LENGTH=512
 BATCH_SIZE=8
 GRADIENT_ACCUMULATION=2
 NUM_EPOCHS=1
@@ -134,7 +134,6 @@ swift rlhf \
     --gradient_accumulation_steps ${GRADIENT_ACCUMULATION} \
     --save_strategy 'steps' \
     --eval_strategy 'steps' \
-    --eval_batch_size ${EVAL_BATCH_SIZE} \
     --val_dataset ${VAL_DATASET_PATH} \
     --eval_steps 50 \
     --save_steps 200 \
@@ -149,7 +148,7 @@ swift rlhf \
     --log_completions true \
     --num_iterations 1 \
     --beta ${BETA} \
-    --overlong_filter true
+    --overlong_filter true \
     --max_grad_norm 1.0
 
 echo "Training complete! Results saved to ${OUTPUT_DIR}"
