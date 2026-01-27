@@ -38,9 +38,12 @@ from collections import Counter
 from typing import Any, Dict, List
 
 
-def get_frame_paths(scene_name: str, frames_dir: str, num_frames: int = 32) -> List[str]:
-    """Get sorted frame paths for a scene."""
-    scene_frames_dir = os.path.join(frames_dir, scene_name)
+def get_frame_paths(dataset: str, scene_name: str, frames_dir: str, num_frames: int = 32) -> List[str]:
+    """Get sorted frame paths for a scene.
+
+    Directory structure: frames_dir/dataset/scene_name/*.jpg
+    """
+    scene_frames_dir = os.path.join(frames_dir, dataset, scene_name)
 
     if not os.path.isdir(scene_frames_dir):
         return []
@@ -62,8 +65,9 @@ def get_frame_paths(scene_name: str, frames_dir: str, num_frames: int = 32) -> L
 
 def convert_sample(sample: Dict[str, Any], frames_dir: str, num_frames: int = 32) -> Dict[str, Any]:
     """Convert a single test sample to GRPO format."""
+    dataset = sample.get('dataset', '')
     scene_name = sample.get('scene_name', '')
-    images = get_frame_paths(scene_name, frames_dir, num_frames)
+    images = get_frame_paths(dataset, scene_name, frames_dir, num_frames)
 
     # Build user content
     question = sample.get('question', '')
