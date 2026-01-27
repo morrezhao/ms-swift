@@ -16,9 +16,14 @@
 # ============================================================
 MODEL="/upfs/models/Qwen/Qwen3-VL-8B-Instruct"
 DATASET_PATH="/upfs/enhan/code/ms-swift/vsi_data/processed/combined_train.json"  # Combined VSI training data (all 3 datasets)
+VAL_DATASET_PATH="/upfs/enhan/code/ms-swift/vsi_data/processed/vsi_bench_test.json"  # VSI-Bench test set for evaluation
 # FRAMES_DIR is no longer needed - preprocessed data already has absolute image paths
 OUTPUT_DIR="output/vsi_grpo"
 NUM_FRAMES=32
+
+# Evaluation settings
+EVAL_STEPS=100
+EVAL_BATCH_SIZE=4
 
 # Training hyperparameters
 LEARNING_RATE=1e-6
@@ -50,6 +55,7 @@ CUDA_VISIBLE_DEVICES=6,7 swift rollout \
     --model ${MODEL} \
     --vllm_data_parallel_size 2 \
     --vllm_disable_mm_preprocessor_cache true \
+    --vllm_max_lora_rank 64 \
     --port 8000 &
 
 until ss -lnt | grep -q ":8000"; do sleep 1; done
@@ -68,6 +74,8 @@ swift rlhf \
     --vllm_server_port 8000 \
     --vllm_disable_mm_preprocessor_cache true \
     --tuner_type lora \
+    --lora_rank 64 \
+    --lora_alpha 128 \
     --torch_dtype bfloat16 \
     --dataset ${DATASET_PATH} \
     --load_from_cache_file true \
@@ -76,6 +84,10 @@ swift rlhf \
     --per_device_train_batch_size ${BATCH_SIZE} \
     --learning_rate ${LEARNING_RATE} \
     --gradient_accumulation_steps ${GRADIENT_ACCUMULATION} \
+    --val_dataset ${VAL_DATASET_PATH} \
+    --per_device_eval_batch_size ${EVAL_BATCH_SIZE} \
+    --eval_strategy 'steps' \
+    --eval_steps ${EVAL_STEPS} \
     --save_strategy 'steps' \
     --save_steps 200 \
     --save_total_limit 5 \
