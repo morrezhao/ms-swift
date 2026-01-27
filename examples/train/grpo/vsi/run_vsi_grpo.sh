@@ -16,14 +16,14 @@
 # ============================================================
 MODEL="/upfs/models/Qwen/Qwen3-VL-8B-Instruct"
 DATASET_PATH="/upfs/enhan/code/ms-swift/vsi_data/processed/combined_train.json"  # Combined VSI training data (all 3 datasets)
-VAL_DATASET_PATH="/upfs/enhan/code/ms-swift/vsi_data/processed/vsi_bench_test.json"  # VSI-Bench test set for evaluation
+VAL_DATASET_PATH="/upfs/enhan/code/ms-swift/vsi_data/test/vsi_test.json"  # VSI-Bench test set for evaluation
 # FRAMES_DIR is no longer needed - preprocessed data already has absolute image paths
 OUTPUT_DIR="output/vsi_grpo"
 NUM_FRAMES=32
 
 # Evaluation settings
 EVAL_STEPS=100
-EVAL_BATCH_SIZE=4
+EVAL_BATCH_SIZE=8
 
 # Training hyperparameters
 LEARNING_RATE=1e-6
