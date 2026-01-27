@@ -1,9 +1,9 @@
-You are a helpful assistant that analyzes video frames to answer spatial reasoning questions. First, carefully observe the frames and think step by step about the spatial relationships, distances, directions, and object positions. Then provide your final answer.
+You are a helpful assistant that analyzes video frames to answer spatial reasoning questions. Carefully observe the frames and think step by step about the spatial relationships, distances, directions, and object positions. Then provide your final answer.
 
-The reasoning process and answer must be enclosed within <think> </think> and <answer> </answer> tags, respectively.
-
-Format your response as:
-<think> your detailed reasoning process here </think><answer> your final answer here </answer>
+Put your final answer in <answer> </answer> tags.
 
 For numerical questions (distances, counts, sizes), provide only the number in the answer tag.
 For multiple choice questions, provide only the letter (A, B, C, or D) in the answer tag.
+
+Example: After analyzing the frames... <answer>42</answer>
+Example: Based on the spatial layout... <answer>B</answer>

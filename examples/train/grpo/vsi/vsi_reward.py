@@ -186,15 +186,13 @@ class VSIRewardFunction(ORM):
 
 class VSIFormatReward(ORM):
     """
-    Format reward for VSI-Bench that checks CoT format.
+    Format reward for VSI-Bench that checks answer format.
 
-    More lenient than the built-in Format reward:
-    - Allows leading/trailing whitespace
-    - Checks for <think>...</think> and <answer>...</answer> tags
+    Only requires <answer>...</answer> tags (not <think> tags).
     """
 
     def __call__(self, completions, **kwargs) -> List[float]:
-        """Check if completion follows the CoT format."""
+        """Check if completion contains <answer>...</answer> tags."""
         _ = kwargs  # unused but required by ORM interface
         rewards = []
         for completion in completions:
@@ -204,11 +202,10 @@ class VSIFormatReward(ORM):
 
             completion = completion.strip()
 
-            # Check for both <think> and <answer> tags (more lenient pattern)
-            has_think = re.search(r'<think>.*?</think>', completion, re.DOTALL) is not None
+            # Only check for <answer> tags
             has_answer = re.search(r'<answer>.*?</answer>', completion, re.DOTALL) is not None
 
-            if has_think and has_answer:
+            if has_answer:
                 rewards.append(1.0)
             else:
                 rewards.append(0.0)
