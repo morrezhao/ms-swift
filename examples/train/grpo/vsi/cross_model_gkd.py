@@ -17,7 +17,6 @@ Usage:
 """
 import os
 import torch
-import torch.nn.functional as F
 from contextlib import nullcontext
 from copy import deepcopy
 from typing import Dict, Any, List, Optional, Tuple
@@ -111,17 +110,25 @@ def find_response_token_positions(input_ids: torch.Tensor, labels: torch.Tensor)
 
 def align_teacher_positions(
     teacher_input_ids: torch.Tensor,
-    student_response_info: List[List[tuple]]
+    student_response_info: List[List[tuple]],
+    student_seq_len: int
 ) -> List[List[int]]:
     """Find corresponding positions in teacher sequence for student's response tokens.
 
-    Strategy: Match by token ID sequence from the end of the sequence.
-    The response tokens should have the same token IDs in both student and teacher,
-    just at different positions due to different visual token counts.
+    Strategy: Align from the end of sequence (right-align).
+    Since response tokens are at the end and have identical token IDs in both
+    student and teacher, we just need to compute the offset from sequence end.
+
+    Alignment diagram:
+        Student: [visual_tokens_A][prompt][response]
+                                              ^--- offset_from_end = 0
+        Teacher: [visual_tokens_B][prompt][response]
+                                              ^--- teacher_len - 1 - offset_from_end
 
     Args:
         teacher_input_ids: [batch_size, seq_len]
         student_response_info: List of [(pos, token_id), ...] for each batch item
+        student_seq_len: Length of student sequence
 
     Returns:
         List of teacher positions corresponding to each student response token
@@ -135,47 +142,16 @@ def align_teacher_positions(
             teacher_positions.append(positions)
             continue
 
-        # Get the response token IDs from student
-        response_token_ids = [token_id for _, token_id in student_response_info[b]]
+        teacher_len = teacher_input_ids.shape[1]
 
-        # Find these tokens in teacher's sequence
-        # Search from the end since response is at the end
-        teacher_ids = teacher_input_ids[b].tolist()
-        teacher_len = len(teacher_ids)
-
-        # Try to find the response sequence in teacher
-        # Start by finding the first response token
-        first_token = response_token_ids[0]
-        start_pos = None
-
-        # Search for the start of response in teacher
-        for i in range(teacher_len - len(response_token_ids), -1, -1):
-            if teacher_ids[i] == first_token:
-                # Check if the sequence matches
-                match = True
-                for j, token_id in enumerate(response_token_ids):
-                    if i + j >= teacher_len or teacher_ids[i + j] != token_id:
-                        match = False
-                        break
-                if match:
-                    start_pos = i
-                    break
-
-        if start_pos is not None:
-            # Found matching sequence
-            positions = list(range(start_pos, start_pos + len(response_token_ids)))
-        else:
-            # Fallback: assume same offset from end
-            # This happens if tokenization differs slightly
-            student_last_pos = student_response_info[b][-1][0] if student_response_info[b] else 0
-            student_seq_len = student_last_pos + 1
-            offset_from_end = student_seq_len - student_response_info[b][0][0]
-            teacher_start = teacher_len - offset_from_end
-            if teacher_start >= 0:
-                positions = list(range(teacher_start, min(teacher_start + len(response_token_ids), teacher_len)))
-            else:
-                logger.warning(f"Could not align batch {b}, using last N positions")
-                positions = list(range(max(0, teacher_len - len(response_token_ids)), teacher_len))
+        # Right-align: compute offset from end for each response position
+        for student_pos, _ in student_response_info[b]:
+            # Offset from end in student sequence
+            offset_from_end = student_seq_len - 1 - student_pos
+            # Corresponding position in teacher sequence
+            teacher_pos = teacher_len - 1 - offset_from_end
+            if teacher_pos >= 0:
+                positions.append(teacher_pos)
 
         teacher_positions.append(positions)
 
@@ -228,8 +204,9 @@ def compute_loss_cross_model_with_images(self, model, inputs, return_outputs=Fal
             teacher_input_ids = student_input_ids
             outputs_teacher = self.teacher_model(**model_inputs)
 
-    # Find aligned positions in teacher's sequence
-    teacher_positions = align_teacher_positions(teacher_input_ids, student_response_info)
+    # Find aligned positions in teacher's sequence (right-align)
+    student_seq_len = student_input_ids.shape[1]
+    teacher_positions = align_teacher_positions(teacher_input_ids, student_response_info, student_seq_len)
 
     # Extract logits at aligned positions and compute loss
     batch_size = student_input_ids.shape[0]
@@ -273,16 +250,6 @@ def compute_loss_cross_model_with_images(self, model, inputs, return_outputs=Fal
     # Concatenate all logits
     shifted_student_logits = torch.cat(all_student_logits, dim=0)[None]  # [1, total_tokens, vocab]
     shifted_teacher_logits = torch.cat(all_teacher_logits, dim=0)[None]
-
-    # Handle vocab size mismatch
-    stu_dim = shifted_student_logits.shape[-1]
-    tea_dim = shifted_teacher_logits.shape[-1]
-    if stu_dim < tea_dim:
-        shifted_student_logits = F.pad(shifted_student_logits, (0, tea_dim - stu_dim), 'constant', 0)
-        shifted_student_logits[..., stu_dim:] = shifted_teacher_logits[..., stu_dim:]
-    elif stu_dim > tea_dim:
-        shifted_teacher_logits = F.pad(shifted_teacher_logits, (0, stu_dim - tea_dim), 'constant', 0)
-        shifted_teacher_logits[..., tea_dim:] = shifted_student_logits[..., tea_dim:]
 
     # Compute JSD loss
     loss = self.generalized_jsd_loss(

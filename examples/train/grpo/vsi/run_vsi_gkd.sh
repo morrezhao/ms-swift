@@ -11,10 +11,10 @@
 # Model Configuration
 # ============================================================
 # Student model (small) - will be trained
-STUDENT_MODEL="/upfs/models/Qwen/Qwen2.5-VL-3B-Instruct"
+STUDENT_MODEL="/upfs/models/Qwen/Qwen2.5-VL-7B-Instruct"
 
 # Teacher model (big) - provides soft labels
-TEACHER_MODEL="/upfs/models/Qwen/Qwen2.5-VL-7B-Instruct"
+TEACHER_MODEL="/upfs/models/Qwen/Qwen3-VL-8B-Instruct"
 
 # ============================================================
 # Dataset Configuration
