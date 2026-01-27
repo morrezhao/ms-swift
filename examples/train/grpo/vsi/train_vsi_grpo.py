@@ -123,6 +123,7 @@ def main():
         output_dir=args.output_dir,
         reward_funcs=['vsi_reward'],
         external_plugins=[os.path.join(os.path.dirname(__file__), 'vsi_reward.py')],
+        num_generations_eval=1,  # Use single generation for faster evaluation
     )
 
     # Override with config file if provided
