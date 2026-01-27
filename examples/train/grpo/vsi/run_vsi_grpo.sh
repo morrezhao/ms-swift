@@ -101,66 +101,22 @@ export MAX_PIXELS=200704  # ~256*28*28
 # Split GPUs between training and inference
 # ============================================================
 
-# First, start the vLLM rollout server in a separate terminal:
-# CUDA_VISIBLE_DEVICES=4,5,6,7 swift rollout \
-#     --model ${MODEL} \
-#     --vllm_data_parallel_size 2 \
-#     --vllm_disable_mm_preprocessor_cache true \
-#     --vllm_max_lora_rank 64 \
-#     --port 8000 &
+# First, start the vLLM rollout server in background
+CUDA_VISIBLE_DEVICES=4,5,6,7 swift rollout \
+    --model ${MODEL} \
+    --vllm_tensor_parallel_size 4 \
+    --vllm_disable_mm_preprocessor_cache true \
+    --vllm_max_lora_rank 64 \
+    --port 8000 &
 
-# until ss -lnt | grep -q ":8000"; do sleep 1; done
-# # Then run training:
-# CUDA_VISIBLE_DEVICES=0,1,2,3 \
-# NPROC_PER_NODE=6 \
-# swift rlhf \
-#     --rlhf_type grpo \
-#     --model ${MODEL} \
-#     --external_plugins examples/train/grpo/vsi/vsi_reward.py \
-#     --reward_funcs vsi_reward \
-#     --system ${SYSTEM_PROMPT} \
-#     --use_vllm true \
-#     --vllm_mode server \
-#     --vllm_server_host 127.0.0.1 \
-#     --vllm_server_port 8000 \
-#     --vllm_disable_mm_preprocessor_cache true \
-#     --tuner_type lora \
-#     --lora_rank 64 \
-#     --lora_alpha 128 \
-#     --torch_dtype bfloat16 \
-#     --dataset ${DATASET_PATH} \
-#     --load_from_cache_file true \
-#     --max_completion_length ${MAX_COMPLETION_LENGTH} \
-#     --num_train_epochs ${NUM_EPOCHS} \
-#     --per_device_train_batch_size ${BATCH_SIZE} \
-#     --learning_rate ${LEARNING_RATE} \
-#     --gradient_accumulation_steps ${GRADIENT_ACCUMULATION} \
-#     --val_dataset ${VAL_DATASET_PATH} \
-#     --per_device_eval_batch_size ${EVAL_BATCH_SIZE} \
-#     --eval_strategy 'steps' \
-#     --eval_steps ${EVAL_STEPS} \
-#     --save_strategy 'steps' \
-#     --save_steps 200 \
-#     --save_total_limit 5 \
-#     --logging_steps 10 \
-#     --output_dir ${OUTPUT_DIR} \
-#     --warmup_ratio 0.05 \
-#     --dataloader_num_workers 4 \
-#     --num_generations ${NUM_GENERATIONS} \
-#     --temperature 1.0 \
-#     --log_completions true \
-#     --num_iterations 1 \
-#     --beta ${BETA} \
-#     --overlong_filter true
+echo "Waiting for vLLM server to start..."
+until ss -lnt | grep -q ":8000"; do sleep 1; done
+echo "vLLM server is ready!"
 
-# ============================================================
-# Option 2: Colocate Mode (Training and inference on same GPUs)
-# Simpler setup but requires more careful memory management
-# ============================================================
-
+# Then run training on remaining GPUs
 MAX_PIXELS=${MAX_PIXELS} \
-CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
-NPROC_PER_NODE=${NPROC_PER_NODE} \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+NPROC_PER_NODE=4 \
 swift rlhf \
     --rlhf_type grpo \
     --model ${MODEL} \
@@ -168,9 +124,9 @@ swift rlhf \
     --reward_funcs vsi_reward \
     --system ${SYSTEM_PROMPT} \
     --use_vllm true \
-    --vllm_mode colocate \
-    --vllm_gpu_memory_utilization 0.5 \
-    --vllm_tensor_parallel_size 4 \
+    --vllm_mode server \
+    --vllm_server_host 127.0.0.1 \
+    --vllm_server_port 8000 \
     --tuner_type lora \
     --lora_rank 64 \
     --lora_alpha 128 \
@@ -180,26 +136,74 @@ swift rlhf \
     --max_completion_length ${MAX_COMPLETION_LENGTH} \
     --num_train_epochs ${NUM_EPOCHS} \
     --per_device_train_batch_size ${BATCH_SIZE} \
-    --per_device_eval_batch_size ${BATCH_SIZE} \
     --learning_rate ${LEARNING_RATE} \
     --gradient_accumulation_steps ${GRADIENT_ACCUMULATION} \
-    --save_strategy 'steps' \
-    --eval_strategy 'steps' \
     --val_dataset ${VAL_DATASET_PATH} \
-    --eval_steps 50 \
+    --per_device_eval_batch_size ${EVAL_BATCH_SIZE} \
+    --eval_strategy steps \
+    --eval_steps ${EVAL_STEPS} \
+    --save_strategy steps \
     --save_steps 200 \
-    --save_total_limit 3 \
+    --save_total_limit 5 \
     --logging_steps 10 \
     --output_dir ${OUTPUT_DIR} \
     --warmup_ratio 0.05 \
     --dataloader_num_workers 4 \
     --num_generations ${NUM_GENERATIONS} \
     --temperature 1.0 \
-    --sleep_level 1 \
     --log_completions true \
     --num_iterations 1 \
     --beta ${BETA} \
     --overlong_filter true \
     --max_grad_norm 1.0
+
+# ============================================================
+# Option 2: Colocate Mode (Training and inference on same GPUs)
+# Simpler setup but requires more careful memory management
+# ============================================================
+
+# MAX_PIXELS=${MAX_PIXELS} \
+# CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
+# NPROC_PER_NODE=${NPROC_PER_NODE} \
+# swift rlhf \
+#     --rlhf_type grpo \
+#     --model ${MODEL} \
+#     --external_plugins examples/train/grpo/vsi/vsi_reward.py \
+#     --reward_funcs vsi_reward \
+#     --system ${SYSTEM_PROMPT} \
+#     --use_vllm true \
+#     --vllm_mode colocate \
+#     --vllm_gpu_memory_utilization 0.5 \
+#     --vllm_tensor_parallel_size 4 \
+#     --tuner_type lora \
+#     --lora_rank 64 \
+#     --lora_alpha 128 \
+#     --torch_dtype bfloat16 \
+#     --dataset ${DATASET_PATH} \
+#     --load_from_cache_file true \
+#     --max_completion_length ${MAX_COMPLETION_LENGTH} \
+#     --num_train_epochs ${NUM_EPOCHS} \
+#     --per_device_train_batch_size ${BATCH_SIZE} \
+#     --per_device_eval_batch_size ${BATCH_SIZE} \
+#     --learning_rate ${LEARNING_RATE} \
+#     --gradient_accumulation_steps ${GRADIENT_ACCUMULATION} \
+#     --save_strategy steps \
+#     --eval_strategy steps \
+#     --val_dataset ${VAL_DATASET_PATH} \
+#     --eval_steps ${EVAL_STEPS} \
+#     --save_steps 200 \
+#     --save_total_limit 5 \
+#     --logging_steps 10 \
+#     --output_dir ${OUTPUT_DIR} \
+#     --warmup_ratio 0.05 \
+#     --dataloader_num_workers 4 \
+#     --num_generations ${NUM_GENERATIONS} \
+#     --temperature 1.0 \
+#     --sleep_level 1 \
+#     --log_completions true \
+#     --num_iterations 1 \
+#     --beta ${BETA} \
+#     --overlong_filter true \
+#     --max_grad_norm 1.0
 
 echo "Training complete! Results saved to ${OUTPUT_DIR}"
