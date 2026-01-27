@@ -115,7 +115,9 @@ until ss -lnt | grep -q ":8000"; do sleep 1; done
 echo "vLLM server ready!"
 
 # Run GKD training (4 GPUs)
+# CROSS_MODEL_GKD=1 enables cross-model distillation (teacher uses text-only, no images)
 MAX_PIXELS=${MAX_PIXELS} \
+CROSS_MODEL_GKD=1 \
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 NPROC_PER_NODE=4 \
 PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True' \
@@ -123,6 +125,7 @@ swift rlhf \
     --rlhf_type gkd \
     --model ${STUDENT_MODEL} \
     --teacher_model ${TEACHER_MODEL} \
+    --external_plugins examples/train/grpo/vsi/cross_model_gkd.py \
     --tuner_type lora \
     --lora_rank 64 \
     --lora_alpha 128 \
