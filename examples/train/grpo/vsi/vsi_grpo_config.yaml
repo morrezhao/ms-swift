@@ -34,6 +34,7 @@ num_generations: 8             # Number of generations per prompt
 num_iterations: 1              # Number of policy updates per rollout
 temperature: 1.0               # Sampling temperature for generation
 max_completion_length: 2048    # Max tokens for model response (increased for CoT)
+overlong_filter: true          # Skip truncated samples from loss calculation
 
 # CoT System Prompt
 system: examples/train/grpo/vsi/vsi_cot_prompt.txt
