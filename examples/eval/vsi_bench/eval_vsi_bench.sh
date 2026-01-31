@@ -16,9 +16,13 @@ MODEL="/upfs/models/Qwen/${MODEL_NAME}"
 VIDEO_DIR="/upfs/enhan/data/nyu-visionx/VSI-Bench"
 FRAMES_DIR="/upfs/enhan/data/nyu-visionx/VSI-Bench-frames"  # Pre-extracted frames (faster)
 DATA_PATH="/upfs/enhan/data/nyu-visionx/VSI-Bench/test.jsonl"  # Local dataset file (JSON/JSONL)
-OUTPUT_DIR="/upfs/enhan/vsi_bench_output/${MODEL_NAME}"
 NUM_FRAMES=32
 EVAL_LIMIT=100  # Set to empty or remove for full evaluation
+
+# Algorithm and checkpoint settings
+ALGO_NAME="origin"  # Options: origin, grpo, gkd
+CKPT_STEP=""        # e.g., "1000", leave empty for base model
+OUTPUT_DIR="/upfs/enhan/vsi_bench_output/${MODEL_NAME}_${ALGO_NAME}${CKPT_STEP:+_step${CKPT_STEP}}"
 
 # ============================================================
 # Step 0: Extract frames from videos (run once, highly recommended)
