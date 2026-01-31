@@ -57,6 +57,8 @@ class VSIBenchArguments:
 
     # Prompt settings
     simple_prompt: bool = field(default=False, metadata={'help': 'Use simple prompt (Qwen VL report style, single round)'})
+    cot_prompt: bool = field(default=False, metadata={'help': 'Use CoT prompt with <answer> tag extraction (single round)'})
+    system_prompt_file: Optional[str] = field(default=None, metadata={'help': 'Path to system prompt file'})
 
 
 def load_vsi_bench_dataset(
@@ -172,12 +174,24 @@ def load_vsi_bench_dataset(
     return samples
 
 
-def build_prompt(sample: Dict[str, Any], simple_prompt: bool = False) -> str:
+def extract_answer_from_tags(response: str) -> Optional[str]:
+    """Extract answer from <answer> tags if present."""
+    import re
+    if response is None:
+        return None
+    match = re.search(r'<answer>(.*?)</answer>', response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def build_prompt(sample: Dict[str, Any], simple_prompt: bool = False, cot_prompt: bool = False) -> str:
     """Build prompt for a VSI-Bench sample.
 
     Args:
         sample: Sample dictionary
         simple_prompt: If True, use Qwen VL report style single-round prompt
+        cot_prompt: If True, use CoT prompt (question only, system prompt handles format)
 
     Returns:
         Formatted prompt string
@@ -185,7 +199,13 @@ def build_prompt(sample: Dict[str, Any], simple_prompt: bool = False) -> str:
     question = sample['question']
     options = sample.get('options')
 
-    if simple_prompt:
+    if cot_prompt:
+        # CoT mode: only question + options, system prompt handles reasoning instructions
+        if options:
+            prompt = f'{question}\nOptions:\n{chr(10).join(options)}'
+        else:
+            prompt = question
+    elif simple_prompt:
         if options:
             prompt = (
                 'These are frames of a video.\n'
@@ -271,6 +291,7 @@ def run_inference(
     infer_engine,
     samples: List[Dict[str, Any]],
     args: VSIBenchArguments,
+    system_prompt: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Run batch inference on VSI-Bench samples using two-round dialogue.
 
@@ -284,6 +305,7 @@ def run_inference(
         infer_engine: Inference engine instance
         samples: List of dataset samples
         args: Evaluation arguments
+        system_prompt: Optional system prompt to use
 
     Returns:
         List of samples with predictions
@@ -324,8 +346,11 @@ def run_inference(
         sample_media = []
 
         for sample in batch_samples:
-            prompt = build_prompt(sample, simple_prompt=args.simple_prompt)
-            messages = [{'role': 'user', 'content': prompt}]
+            prompt = build_prompt(sample, simple_prompt=args.simple_prompt, cot_prompt=args.cot_prompt)
+            messages = []
+            if system_prompt:
+                messages.append({'role': 'system', 'content': system_prompt})
+            messages.append({'role': 'user', 'content': prompt})
 
             videos = []
             images = []
@@ -337,9 +362,9 @@ def run_inference(
             requests.append(InferRequest(messages=messages, videos=videos, images=images))
             sample_media.append({'videos': videos, 'images': images, 'prompt': prompt})
 
-        if args.simple_prompt:
-            # Simple prompt mode: single round, direct answer
-            logger.info(f'Running inference for batch {batch_idx + 1}...')
+        if args.cot_prompt:
+            # CoT prompt mode: single round, extract answer from <answer> tags
+            logger.info(f'Running CoT inference for batch {batch_idx + 1}...')
             responses = _run_batch_inference(
                 infer_engine, requests, reasoning_config, 'Inference'
             )
@@ -347,11 +372,16 @@ def run_inference(
             for i, sample in enumerate(batch_samples):
                 try:
                     if responses[i] is not None:
-                        final_answer = responses[i].choices[0].message.content
+                        raw_response = responses[i].choices[0].message.content
+                        # Extract answer from <answer> tags
+                        extracted = extract_answer_from_tags(raw_response)
+                        final_answer = extracted if extracted is not None else raw_response
                     else:
+                        raw_response = ''
                         final_answer = ''
                 except Exception as e:
                     logger.warning(f'Failed to extract answer for sample {sample["id"]}: {e}')
+                    raw_response = ''
                     final_answer = ''
 
                 result = {
@@ -361,7 +391,7 @@ def run_inference(
                     'ground_truth': sample['ground_truth'],
                     'prediction': final_answer,
                     'is_multiple_choice': sample.get('options') is not None,
-                    'raw_response': final_answer,
+                    'raw_response': raw_response,
                     'extraction_response': final_answer,
                 }
                 all_results.append(result)
@@ -370,8 +400,9 @@ def run_inference(
                     logger.info(f'Sample {start_idx + i + 1}/{len(samples)}: {sample["id"]}')
                     logger.info(f'  Question: {sample["question"][:100]}...')
                     logger.info(f'  Ground Truth: {sample["ground_truth"]}')
-                    logger.info(f'  Answer: {final_answer}')
-        else:
+                    logger.info(f'  Raw Response: {raw_response[:200]}...' if len(raw_response) > 200 else f'  Raw Response: {raw_response}')
+                    logger.info(f'  Extracted Answer: {final_answer}')
+        elif args.simple_prompt:
             # Two-round mode: reasoning + extraction
             logger.info(f'Running first round inference for batch {batch_idx + 1}...')
             first_round_responses = _run_batch_inference(
@@ -502,9 +533,17 @@ def run_evaluation(args: VSIBenchArguments):
         data_path=args.data_path,
     )
 
+    # Load system prompt if specified
+    system_prompt = None
+    if args.system_prompt_file:
+        logger.info(f'Loading system prompt from: {args.system_prompt_file}')
+        with open(args.system_prompt_file, 'r', encoding='utf-8') as f:
+            system_prompt = f.read().strip()
+        logger.info(f'System prompt loaded ({len(system_prompt)} chars)')
+
     # Run inference
     logger.info('Running inference...')
-    results = run_inference(infer_engine, samples, args)
+    results = run_inference(infer_engine, samples, args, system_prompt=system_prompt)
 
     # Evaluate
     logger.info('Evaluating results...')
@@ -551,6 +590,8 @@ def main():
     parser.add_argument('--output_dir', type=str, default='./vsi_bench_output', help='Output directory')
     parser.add_argument('--verbose', action='store_true', help='Verbose output')
     parser.add_argument('--simple_prompt', action='store_true', help='Use simple prompt (Qwen VL report style, single round)')
+    parser.add_argument('--cot_prompt', action='store_true', help='Use CoT prompt with <answer> tag extraction (single round)')
+    parser.add_argument('--system_prompt_file', type=str, default=None, help='Path to system prompt file')
 
     parsed_args = parser.parse_args()
     args = VSIBenchArguments(**vars(parsed_args))

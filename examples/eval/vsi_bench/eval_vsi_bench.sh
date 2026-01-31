@@ -76,9 +76,11 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m swift.pipelines.eval.run_vsi_benc
     --video_dir ${FRAMES_DIR} \
     --num_frames ${NUM_FRAMES} \
     --output_dir ${OUTPUT_DIR} \
-    --max_new_tokens 256 \
+    --max_new_tokens 2048 \
     --temperature 0.0 \
-    --batch_size 256
+    --batch_size 256 \
+    --cot_prompt \
+    --system_prompt_file examples/train/grpo/vsi/vsi_cot_prompt.txt
 
 # --simple_prompt
 # Note:
