@@ -73,8 +73,8 @@ echo "Training dataset: $DATASET_PATH"
 echo "Validation dataset: $VAL_DATASET_PATH"
 
 # Evaluation settings
-EVAL_STEPS=100
-EVAL_BATCH_SIZE=8
+EVAL_STEPS=1
+EVAL_BATCH_SIZE=96
 
 # Training hyperparameters
 LEARNING_RATE=1e-6
@@ -82,7 +82,7 @@ BETA=0.001
 NUM_GENERATIONS=8
 MAX_COMPLETION_LENGTH=512
 BATCH_SIZE=8
-GRADIENT_ACCUMULATION=2
+GRADIENT_ACCUMULATION=1
 NUM_EPOCHS=1
 # Global batch size = BATCH_SIZE × GRADIENT_ACCUMULATION × NUM_GPUS = 16 × 1 × 8 = 128
 
@@ -102,9 +102,9 @@ export MAX_PIXELS=200704  # ~256*28*28
 # ============================================================
 
 # First, start the vLLM rollout server in background
-CUDA_VISIBLE_DEVICES=4,5,6,7 swift rollout \
+CUDA_VISIBLE_DEVICES=6,7 swift rollout \
     --model ${MODEL} \
-    --vllm_tensor_parallel_size 4 \
+    --vllm_tensor_parallel_size 2 \
     --vllm_disable_mm_preprocessor_cache true \
     --vllm_max_lora_rank 64 \
     --port 8000 &
@@ -115,8 +115,8 @@ echo "vLLM server is ready!"
 
 # Then run training on remaining GPUs
 MAX_PIXELS=${MAX_PIXELS} \
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-NPROC_PER_NODE=4 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+NPROC_PER_NODE=6 \
 swift rlhf \
     --rlhf_type grpo \
     --model ${MODEL} \
@@ -138,10 +138,6 @@ swift rlhf \
     --per_device_train_batch_size ${BATCH_SIZE} \
     --learning_rate ${LEARNING_RATE} \
     --gradient_accumulation_steps ${GRADIENT_ACCUMULATION} \
-    --val_dataset ${VAL_DATASET_PATH} \
-    --per_device_eval_batch_size ${EVAL_BATCH_SIZE} \
-    --eval_strategy steps \
-    --eval_steps ${EVAL_STEPS} \
     --save_strategy steps \
     --save_steps 200 \
     --save_total_limit 5 \
@@ -156,6 +152,11 @@ swift rlhf \
     --beta ${BETA} \
     --overlong_filter true \
     --max_grad_norm 1.0
+
+    # --eval_strategy "no" \
+    # --per_device_eval_batch_size ${EVAL_BATCH_SIZE} \
+    # --val_dataset ${VAL_DATASET_PATH} \
+    # --eval_steps ${EVAL_STEPS} \
 
 # ============================================================
 # Option 2: Colocate Mode (Training and inference on same GPUs)

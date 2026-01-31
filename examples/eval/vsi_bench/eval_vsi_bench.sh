@@ -11,7 +11,7 @@
 #   bash eval_vsi_bench.sh
 
 # Configuration
-MODEL_NAME="Qwen3-VL-8B-Instruct"
+MODEL_NAME="Qwen2.5-VL-7B-Instruct"
 MODEL="/upfs/models/Qwen/${MODEL_NAME}"
 VIDEO_DIR="/upfs/enhan/data/nyu-visionx/VSI-Bench"
 FRAMES_DIR="/upfs/enhan/data/nyu-visionx/VSI-Bench-frames"  # Pre-extracted frames (faster)
@@ -71,15 +71,16 @@ VLLM_MM_INPUT_CACHE_GIB=40 \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m swift.pipelines.eval.run_vsi_bench \
     --model ${MODEL} \
     --infer_backend vllm \
-    --tensor_parallel_size 8 \
+    --tensor_parallel_size 4 \
     --data_path ${DATA_PATH} \
     --video_dir ${FRAMES_DIR} \
     --num_frames ${NUM_FRAMES} \
     --output_dir ${OUTPUT_DIR} \
     --max_new_tokens 256 \
     --temperature 0.0 \
-    --batch_size 256 \
-    --simple_prompt
+    --batch_size 256
+
+# --simple_prompt
 # Note:
 # - Use FRAMES_DIR for pre-extracted frames (faster) or VIDEO_DIR for raw videos
 # - batch_size=0 means process all samples at once (fastest with vLLM)

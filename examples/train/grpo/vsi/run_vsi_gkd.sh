@@ -103,23 +103,23 @@ export MAX_PIXELS=200704
 
 # Start vLLM server for student model generation (4 GPUs)
 echo "Starting vLLM server for student model..."
-CUDA_VISIBLE_DEVICES=4,5,6,7 swift rollout \
+CUDA_VISIBLE_DEVICES=6,7 swift rollout \
     --model ${STUDENT_MODEL} \
-    --vllm_tensor_parallel_size 4 \
+    --vllm_tensor_parallel_size 2 \
     --vllm_max_model_len 4096 \
     --vllm_gpu_memory_utilization 0.9 \
-    --port 8000 &
+    --vllm_disable_mm_preprocessor_cache true \
+    --port 8001 &
 
 echo "Waiting for vLLM server..."
-until ss -lnt | grep -q ":8000"; do sleep 1; done
+until ss -lnt | grep -q ":8001"; do sleep 1; done
 echo "vLLM server ready!"
 
-# Run GKD training (4 GPUs)
-# CROSS_MODEL_GKD=1 enables cross-model distillation (teacher uses text-only, no images)
+# Run GKD training (6 GPUs)
 MAX_PIXELS=${MAX_PIXELS} \
 CROSS_MODEL_GKD=1 \
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-NPROC_PER_NODE=4 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+NPROC_PER_NODE=6 \
 PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True' \
 swift rlhf \
     --rlhf_type gkd \
@@ -156,7 +156,8 @@ swift rlhf \
     --use_vllm true \
     --vllm_mode server \
     --vllm_server_host 127.0.0.1 \
-    --vllm_server_port 8000
+    --vllm_server_port 8001 \
+    --vllm_server_group_port 28029
 
 # ============================================================
 # Option 2: Colocate Mode (Alternative)

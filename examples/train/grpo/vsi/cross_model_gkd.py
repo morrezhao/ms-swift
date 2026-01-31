@@ -1,25 +1,18 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 """
-Cross-Model GKD Trainer for Multimodal Models.
+Cross-Model GKD Trainer for Multimodal Models (Fixed Signature).
 
-This module patches the GKD trainer to support knowledge distillation between
-different model families (e.g., Qwen2.5-VL -> Qwen3-VL) by processing images
-separately for student and teacher models.
-
-Both student and teacher see the images, but processed through their own visual encoders.
-
-Usage:
-    Add to --external_plugins in training command:
-    --external_plugins examples/train/grpo/vsi/cross_model_gkd.py
-
-    Set environment variable:
-    CROSS_MODEL_GKD=1
+Changes:
+1. Fixed TypeError by matching `compute_loss` signature exactly with transformers implementation.
+2. CLEARS hooks from the teacher model (removing Student's hooks).
+3. DOES NOT register new hooks (relies on Qwen3-VL's native forward).
+4. Re-encodes raw inputs using Teacher's processor.
 """
 import os
 import torch
 from contextlib import nullcontext
 from copy import deepcopy
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Tuple
 
 from swift.rlhf_trainers.gkd_trainer import GKDTrainer
 from swift.trainers import disable_gradient_checkpointing
@@ -27,55 +20,63 @@ from swift.utils import get_logger, to_device
 
 logger = get_logger()
 
-# Global storage for teacher template (initialized during training)
 _teacher_template = None
-
+_hooks_cleared = False
 
 def init_teacher_template(trainer):
-    """Initialize teacher template if not already done."""
     global _teacher_template
     if _teacher_template is not None:
         return _teacher_template
 
-    from swift.template import get_template
-    from swift.utils import get_model_meta
+    from swift import get_processor, get_template
 
-    teacher_model = trainer.accelerator.unwrap_model(trainer.teacher_model)
-    model_meta = get_model_meta(teacher_model)
+    teacher_path = getattr(trainer.args, 'teacher_model_id', '/upfs/models/Qwen/Qwen3-VL-8B-Instruct')
+    if isinstance(teacher_path, list):
+        teacher_path = teacher_path[0]
+        
+    logger.info(f"Initializing Teacher Template for: {teacher_path}")
 
-    # Get template for teacher model
-    _teacher_template = get_template(
-        model_meta.template,
-        trainer.processing_class,
-        default_system=trainer.template.default_system,
-        max_length=trainer.template.max_length,
-        truncation_strategy=trainer.template.truncation_strategy,
-        model=teacher_model,
-    )
-    logger.info(f"Initialized teacher template: {model_meta.template}")
+    processor = get_processor(teacher_path, trust_remote_code=True)
+
+    if hasattr(trainer.args, 'min_pixels') and trainer.args.min_pixels:
+        if hasattr(processor, 'image_processor'):
+            processor.image_processor.min_pixels = trainer.args.min_pixels
+
+    if hasattr(trainer.args, 'max_pixels') and trainer.args.max_pixels:
+        if hasattr(processor, 'image_processor'):
+            processor.image_processor.max_pixels = trainer.args.max_pixels
+
+    _teacher_template = get_template(processor)
     return _teacher_template
 
 
-def encode_for_teacher(trainer, inputs: List[Dict], student_encoded: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-    """Re-encode inputs for teacher model using teacher's template.
-
-    Args:
-        trainer: The GKD trainer instance
-        inputs: Original input data (with raw images)
-        student_encoded: Student's encoded inputs (for reference)
-
-    Returns:
-        Teacher's encoded inputs with properly processed images
+def clear_teacher_hooks(trainer):
     """
+    只做清理，不注册。
+    """
+    global _hooks_cleared
+    if _hooks_cleared:
+        return
+
+    teacher_model = trainer.teacher_model
+
+    if hasattr(teacher_model, '_forward_pre_hooks'):
+        num_hooks = len(teacher_model._forward_pre_hooks)
+        if num_hooks > 0:
+            logger.info(f"Clearing {num_hooks} hooks from Teacher Model.")
+            teacher_model._forward_pre_hooks.clear()
+
+    _hooks_cleared = True
+
+
+def encode_for_teacher(trainer, inputs: List[Dict]) -> Dict[str, torch.Tensor]:
     teacher_template = init_teacher_template(trainer)
 
-    # Encode each input using teacher's template
     batch_encoded = []
     for data in inputs:
         encoded = teacher_template.encode(data, return_length=True)
         batch_encoded.append(encoded)
 
-    # Collate into batch
     teacher_inputs = to_device(
         teacher_template.data_collator(batch_encoded),
         trainer.teacher_model.device
@@ -85,18 +86,8 @@ def encode_for_teacher(trainer, inputs: List[Dict], student_encoded: Dict[str, t
 
 
 def find_response_token_positions(input_ids: torch.Tensor, labels: torch.Tensor) -> List[List[Tuple[int, int]]]:
-    """Find positions of response tokens (where labels != -100).
-
-    Args:
-        input_ids: [batch_size, seq_len]
-        labels: [batch_size, seq_len], -100 for non-response positions
-
-    Returns:
-        List of lists, each containing (position, token_id) tuples for response tokens
-    """
     batch_size = input_ids.shape[0]
     response_info = []
-
     for b in range(batch_size):
         info = []
         for pos in range(labels.shape[1]):
@@ -104,71 +95,31 @@ def find_response_token_positions(input_ids: torch.Tensor, labels: torch.Tensor)
                 token_id = input_ids[b, pos].item()
                 info.append((pos, token_id))
         response_info.append(info)
-
     return response_info
 
 
-def align_teacher_positions(
-    teacher_input_ids: torch.Tensor,
-    student_response_info: List[List[tuple]],
-    student_seq_len: int
-) -> List[List[int]]:
-    """Find corresponding positions in teacher sequence for student's response tokens.
-
-    Strategy: Align from the end of sequence (right-align).
-    Since response tokens are at the end and have identical token IDs in both
-    student and teacher, we just need to compute the offset from sequence end.
-
-    Alignment diagram:
-        Student: [visual_tokens_A][prompt][response]
-                                              ^--- offset_from_end = 0
-        Teacher: [visual_tokens_B][prompt][response]
-                                              ^--- teacher_len - 1 - offset_from_end
-
-    Args:
-        teacher_input_ids: [batch_size, seq_len]
-        student_response_info: List of [(pos, token_id), ...] for each batch item
-        student_seq_len: Length of student sequence
-
-    Returns:
-        List of teacher positions corresponding to each student response token
-    """
+def align_teacher_positions(teacher_input_ids: torch.Tensor, student_response_info: List[List[tuple]], student_seq_len: int) -> List[List[int]]:
     batch_size = teacher_input_ids.shape[0]
     teacher_positions = []
-
     for b in range(batch_size):
         positions = []
         if not student_response_info[b]:
             teacher_positions.append(positions)
             continue
-
         teacher_len = teacher_input_ids.shape[1]
-
-        # Right-align: compute offset from end for each response position
         for student_pos, _ in student_response_info[b]:
-            # Offset from end in student sequence
             offset_from_end = student_seq_len - 1 - student_pos
-            # Corresponding position in teacher sequence
             teacher_pos = teacher_len - 1 - offset_from_end
             if teacher_pos >= 0:
                 positions.append(teacher_pos)
-
         teacher_positions.append(positions)
-
     return teacher_positions
 
 
 def compute_loss_cross_model_with_images(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-    """Compute loss where both student and teacher see images.
-
-    Key: KL loss is computed only on student-generated tokens, with proper alignment.
-
-    Alignment strategy:
-    1. Identify response tokens in student's sequence (labels != -100)
-    2. Find the same token sequence in teacher's output
-    3. Compute KL only on those aligned positions
-    """
     from swift.rlhf_trainers.gkd_trainer import DataSource
+
+    clear_teacher_hooks(self)
 
     data_source = inputs.pop('_data_source', DataSource.DATASET)
     raw_inputs = inputs.pop('_raw_inputs', None)
@@ -177,38 +128,32 @@ def compute_loss_cross_model_with_images(self, model, inputs, return_outputs=Fal
     student_input_ids = inputs['input_ids']
     student_labels = inputs['labels']
 
-    # Student forward
     if self.args.sft_alpha > 0:
         model_inputs['labels'] = student_labels
     outputs_student = model(**model_inputs)
     model_inputs.pop('labels', None)
 
-    # Find response token positions in student's sequence
-    student_response_info = find_response_token_positions(student_input_ids, student_labels)
-
-    # Teacher forward
     load_context = self.load_teacher_model_context() if self.args.offload_teacher_model else nullcontext()
     with torch.no_grad(), load_context, disable_gradient_checkpointing(
             self.teacher_model, self.args.gradient_checkpointing_kwargs):
 
         if raw_inputs is not None:
             try:
-                teacher_inputs = encode_for_teacher(self, raw_inputs, model_inputs)
+                teacher_inputs = encode_for_teacher(self, raw_inputs)
                 teacher_input_ids = teacher_inputs['input_ids']
                 outputs_teacher = self.teacher_model(**teacher_inputs)
             except Exception as e:
-                logger.warning(f"Teacher encoding failed: {e}, using student inputs")
+                logger.error(f"Teacher forward failed: {e}")
                 teacher_input_ids = student_input_ids
                 outputs_teacher = self.teacher_model(**model_inputs)
         else:
             teacher_input_ids = student_input_ids
             outputs_teacher = self.teacher_model(**model_inputs)
 
-    # Find aligned positions in teacher's sequence (right-align)
+    student_response_info = find_response_token_positions(student_input_ids, student_labels)
     student_seq_len = student_input_ids.shape[1]
     teacher_positions = align_teacher_positions(teacher_input_ids, student_response_info, student_seq_len)
 
-    # Extract logits at aligned positions and compute loss
     batch_size = student_input_ids.shape[0]
     all_student_logits = []
     all_teacher_logits = []
@@ -216,49 +161,49 @@ def compute_loss_cross_model_with_images(self, model, inputs, return_outputs=Fal
     for b in range(batch_size):
         if not student_response_info[b] or not teacher_positions[b]:
             continue
-
-        # Get student logits at response positions (shifted by 1 for next-token prediction)
-        student_positions = [pos for pos, _ in student_response_info[b]]
-
-        # For next-token prediction, we need logits at position i to predict token at i+1
-        # So we use positions [:-1] to predict tokens at positions [1:]
-        if len(student_positions) > 1:
-            stu_logit_positions = student_positions[:-1]  # Positions to get logits from
-            stu_logits = outputs_student.logits[b, stu_logit_positions, :]  # [num_tokens-1, vocab]
-
-            # Teacher positions (also shifted)
-            tea_positions = teacher_positions[b]
-            if len(tea_positions) > 1:
-                tea_logit_positions = tea_positions[:-1]
-                # Make sure positions are valid
-                tea_logit_positions = [p for p in tea_logit_positions if p < outputs_teacher.logits.shape[1]]
-                if tea_logit_positions:
-                    tea_logits = outputs_teacher.logits[b, tea_logit_positions, :]
-
-                    # Align lengths
-                    min_len = min(stu_logits.shape[0], tea_logits.shape[0])
-                    all_student_logits.append(stu_logits[:min_len])
-                    all_teacher_logits.append(tea_logits[:min_len])
+        student_indices = [pos for pos, _ in student_response_info[b]]
+        teacher_indices = teacher_positions[b]
+        
+        valid_len = min(len(student_indices), len(teacher_indices))
+        if valid_len > 0:
+            stu_logits = outputs_student.logits[b, student_indices[:valid_len], :]
+            tea_logits = outputs_teacher.logits[b, teacher_indices[:valid_len], :]
+            all_student_logits.append(stu_logits)
+            all_teacher_logits.append(tea_logits)
 
     if not all_student_logits:
-        logger.warning("No aligned tokens found, returning zero loss")
         loss = outputs_student.logits.new_zeros(())
         if return_outputs:
             return (loss, outputs_student)
         return loss
 
-    # Concatenate all logits
-    shifted_student_logits = torch.cat(all_student_logits, dim=0)[None]  # [1, total_tokens, vocab]
+    shifted_student_logits = torch.cat(all_student_logits, dim=0)[None]
     shifted_teacher_logits = torch.cat(all_teacher_logits, dim=0)[None]
 
-    # Compute JSD loss
+    # 手动对齐词表维度
+    s_v = shifted_student_logits.shape[-1]
+    t_v = shifted_teacher_logits.shape[-1]
+    if s_v != t_v:
+        target_v = max(s_v, t_v)
+        def pad_to_v(tensor, target):
+            curr = tensor.shape[-1]
+            if curr < target:
+                # 补齐维度并填充极小值
+                pad = torch.full((*tensor.shape[:-1], target - curr), -10000.0, 
+                                 dtype=tensor.dtype, device=tensor.device)
+                return torch.cat([tensor, pad], dim=-1)
+            return tensor
+        
+        shifted_student_logits = pad_to_v(shifted_student_logits, target_v)
+        shifted_teacher_logits = pad_to_v(shifted_teacher_logits, target_v)
+        logger.info(f"Manual alignment applied: {s_v}/{t_v} -> {target_v}")
+
     loss = self.generalized_jsd_loss(
         student_logits=shifted_student_logits,
         teacher_logits=shifted_teacher_logits,
         beta=self.beta,
     )
 
-    # Add SFT loss if enabled
     if self.args.sft_alpha > 0 and data_source != DataSource.STUDENT:
         loss = loss + self.args.sft_alpha * outputs_student.loss
 
@@ -267,40 +212,33 @@ def compute_loss_cross_model_with_images(self, model, inputs, return_outputs=Fal
     return loss
 
 
-# Store original methods
-_original_compute_loss = GKDTrainer.compute_loss
-_original_prepare_batch_inputs = GKDTrainer._prepare_batch_inputs
+# --- Fix: Use Explicit Function Definition Instead of Lambda ---
+# We store the original method first
+_original_compute_loss = getattr(GKDTrainer, '_original_compute_loss', GKDTrainer.compute_loss)
+GKDTrainer._original_compute_loss = _original_compute_loss
 
-
-def patched_prepare_batch_inputs(self, inputs: list, encode_prompt_only: bool = False) -> Dict[str, torch.Tensor]:
-    """Patched to store raw inputs for teacher re-encoding."""
-    use_cross_model = os.environ.get('CROSS_MODEL_GKD', '0') == '1'
-
-    # Call original method
-    encoded = _original_prepare_batch_inputs(self, inputs, encode_prompt_only)
-
-    # Store raw inputs for cross-model re-encoding
-    if use_cross_model:
-        encoded['_raw_inputs'] = deepcopy(inputs)
-
-    return encoded
-
-
+# Explicitly define the patched method with the correct argument name
 def patched_compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-    """Patched compute_loss that handles cross-model distillation with images."""
     use_cross_model = os.environ.get('CROSS_MODEL_GKD', '0') == '1'
-
     if use_cross_model:
         return compute_loss_cross_model_with_images(self, model, inputs, return_outputs, num_items_in_batch)
     else:
+        # Forward to original, passing num_items_in_batch explicitly
         return _original_compute_loss(self, model, inputs, return_outputs, num_items_in_batch)
 
-
-# Apply patches
 GKDTrainer.compute_loss = patched_compute_loss
+
+
+# Prepare Batch Inputs Patch
+_original_prepare_batch_inputs = getattr(GKDTrainer, '_original_prepare_batch_inputs', GKDTrainer._prepare_batch_inputs)
+GKDTrainer._original_prepare_batch_inputs = _original_prepare_batch_inputs
+
+def patched_prepare_batch_inputs(self, inputs: list, encode_prompt_only: bool = False):
+    encoded = _original_prepare_batch_inputs(self, inputs, encode_prompt_only)
+    if os.environ.get('CROSS_MODEL_GKD') == '1':
+        encoded['_raw_inputs'] = deepcopy(inputs)
+    return encoded
+
 GKDTrainer._prepare_batch_inputs = patched_prepare_batch_inputs
 
-cross_model_enabled = os.environ.get('CROSS_MODEL_GKD', '0') == '1'
-logger.info(f"Cross-model GKD patch loaded. CROSS_MODEL_GKD={'enabled' if cross_model_enabled else 'disabled'}")
-if cross_model_enabled:
-    logger.info("Both student and teacher will see images (processed by their own visual encoders).")
+logger.info("Cross-model GKD patch loaded (Signature Fixed).")
