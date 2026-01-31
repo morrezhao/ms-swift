@@ -201,10 +201,21 @@ def build_prompt(sample: Dict[str, Any], simple_prompt: bool = False) -> str:
                 'Please answer the question using a single word or phrase.'
             )
     else:
+        # Default mode: ask model to reason step by step
         if options:
-            prompt = question + '\n' + '\n'.join(options)
+            prompt = (
+                'These are frames of a video.\n'
+                f'{question}\n'
+                'Options:\n'
+                f'{chr(10).join(options)}\n'
+                'Please think step by step and explain your reasoning.'
+            )
         else:
-            prompt = question
+            prompt = (
+                'These are frames of a video.\n'
+                f'{question}\n'
+                'Please think step by step and explain your reasoning.'
+            )
 
     return prompt
 
