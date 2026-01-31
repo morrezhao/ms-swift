@@ -18,6 +18,7 @@ FRAMES_DIR="/upfs/enhan/data/nyu-visionx/VSI-Bench-frames"  # Pre-extracted fram
 DATA_PATH="/upfs/enhan/data/nyu-visionx/VSI-Bench/test.jsonl"  # Local dataset file (JSON/JSONL)
 NUM_FRAMES=32
 EVAL_LIMIT=100  # Set to empty or remove for full evaluation
+ADAPTER=""
 
 # Algorithm and checkpoint settings
 ALGO_NAME="origin"  # Options: origin, grpo, gkd
@@ -74,6 +75,7 @@ OUTPUT_DIR="/upfs/enhan/vsi_bench_output/${MODEL_NAME}_${ALGO_NAME}${CKPT_STEP:+
 VLLM_MM_INPUT_CACHE_GIB=40 \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m swift.pipelines.eval.run_vsi_bench \
     --model ${MODEL} \
+    --adapters ${ADAPTER} \
     --infer_backend vllm \
     --tensor_parallel_size 4 \
     --data_path ${DATA_PATH} \
