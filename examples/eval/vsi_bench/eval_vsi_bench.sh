@@ -87,7 +87,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m swift.pipelines.eval.run_vsi_benc
 # - Set batch_size to a smaller value (e.g., 32, 64) if you encounter OOM errors
 
 # ============================================================
-# Option 4: With LoRA adapters
+# Option 4: With LoRA adapters (using run_vsi_bench module)
 # ============================================================
 # python -m swift.pipelines.eval.run_vsi_bench \
 #     --model ${MODEL} \
@@ -95,5 +95,16 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m swift.pipelines.eval.run_vsi_benc
 #     --video_dir ${VIDEO_DIR} \
 #     --num_frames ${NUM_FRAMES} \
 #     --output_dir ${OUTPUT_DIR}
+
+# ============================================================
+# Option 5: With LoRA adapters (using eval_vsi_bench.py script)
+# ============================================================
+# python examples/eval/vsi_bench/eval_vsi_bench.py \
+#     --model ${MODEL} \
+#     --adapters /path/to/lora/adapter1 /path/to/lora/adapter2 \
+#     --video_dir ${VIDEO_DIR} \
+#     --num_frames ${NUM_FRAMES} \
+#     --output_dir ${OUTPUT_DIR} \
+#     --limit ${EVAL_LIMIT}
 
 echo "Evaluation complete! Results saved to ${OUTPUT_DIR}"

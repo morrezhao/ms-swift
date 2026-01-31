@@ -23,6 +23,7 @@ def evaluate_with_swift_infer(
     num_frames: int = 32,
     limit: Optional[int] = None,
     output_dir: str = './output',
+    adapters: Optional[list] = None,
 ):
     """Evaluate using swift's inference engine.
 
@@ -32,6 +33,7 @@ def evaluate_with_swift_infer(
         num_frames: Number of frames to sample from video
         limit: Maximum number of samples to evaluate
         output_dir: Output directory for results
+        adapters: List of LoRA adapter paths to load
     """
     import json
 
@@ -46,7 +48,9 @@ def evaluate_with_swift_infer(
 
     # Load model with swift
     print(f'Loading model: {model_name}')
-    infer_args = InferArguments(model=model_name, infer_backend='pt')
+    if adapters:
+        print(f'Loading LoRA adapters: {adapters}')
+    infer_args = InferArguments(model=model_name, infer_backend='pt', adapters=adapters or [])
     model, template = prepare_model_template(infer_args)
     engine = TransformersEngine(model, template=template)
 
@@ -272,6 +276,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default='./output', help='Output directory')
     parser.add_argument('--api_url', type=str, default=None, help='API URL (for API-based evaluation)')
     parser.add_argument('--api_key', type=str, default='EMPTY', help='API key')
+    parser.add_argument('--adapters', type=str, nargs='+', default=None, help='LoRA adapter paths')
 
     args = parser.parse_args()
 
@@ -291,6 +296,7 @@ def main():
             num_frames=args.num_frames,
             limit=args.limit,
             output_dir=args.output_dir,
+            adapters=args.adapters,
         )
 
 
