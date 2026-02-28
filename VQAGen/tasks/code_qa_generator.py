@@ -243,7 +243,8 @@ class CodeQAGenerator:
         llm_client: LLMClient,
         config: CodeGenerationConfig = None,
         use_llm_mc: bool = False,
-        mc_config: "QAValidatorConfig" = None
+        mc_config: "QAValidatorConfig" = None,
+        use_tracker: bool = False,
     ):
         """
         Initialize the Code QA Generator.
@@ -253,6 +254,7 @@ class CodeQAGenerator:
             config: Generation configuration
             use_llm_mc: Whether to use LLM for MC option generation
             mc_config: Configuration for MC generator (only used if use_llm_mc=True)
+            use_tracker: Whether to use generation tracker for type balancing
         """
         self.llm_client = llm_client
         self.config = config or CodeGenerationConfig()
@@ -272,7 +274,8 @@ class CodeQAGenerator:
                 mc_config = QAValidatorConfig()
             self.qa_validator = QAValidator(llm_client, mc_config)
 
-        # Will be set during run()
+        # Will be set during run() if use_tracker is enabled
+        self.use_tracker = use_tracker
         self.tracker = None
         self.scene_annos = None
         self.frame_annos = None
@@ -646,7 +649,8 @@ class CodeQAGenerator:
         total_answer_counts = Counter()
 
         # Initialize generation tracker for type balancing
-        self.tracker = GenerationTracker()
+        if self.use_tracker:
+            self.tracker = GenerationTracker()
 
         def process_scene(scene_name: str):
             import time
@@ -901,6 +905,9 @@ def main():
                         help=f'Specific question type to generate. Valid types: {valid_types_str}. '
                              'If not specified, generates a mix of all types.')
 
+    parser.add_argument('--use_tracker', action='store_true',
+                        help='Enable generation tracker for question type balancing across scenes')
+
     # LLM MC generation settings
     parser.add_argument('--use_llm_mc', action='store_true',
                         help='Use LLM for MC option generation instead of rules')
@@ -964,7 +971,8 @@ def main():
         llm_client,
         config,
         use_llm_mc=args.use_llm_mc,
-        mc_config=mc_config
+        mc_config=mc_config,
+        use_tracker=args.use_tracker,
     )
 
     if args.datasets:
