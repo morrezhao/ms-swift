@@ -49,7 +49,7 @@ class VLLMClient(LLMClient):
         return self._model
 
     def generate(self,
-                 messages: List[Dict[str, str]],
+                 messages: List[Dict],
                  temperature: float = 0.7,
                  max_tokens: int = 4096,
                  timeout: Optional[int] = None) -> str:

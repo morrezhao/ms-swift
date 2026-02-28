@@ -4,9 +4,9 @@ python -m tasks.code_qa_generator \
     --datasets arkitscenes:/upfs/enhan/data/processed_data/ARKitScenes \
     --split_type train \
     --output_dir data/qa_output \
-    --llm_backend vllm --llm_model /upfs/models/Qwen/Qwen3-32B \
-    --llm_base_url http://localhost:8001/v1 \
-    --use_llm_mc
+    --llm_backend cockpit --llm_model gemini-2.5-pro \
+    --use_llm_mc \
+    --num_frames 8
     2>&1 | tee -a /upfs/enhan/data/processed_data/ScanNet/code_qa_output/code_qa_generator.log
 
 python -m utils.format_qa \

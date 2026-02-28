@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import argparse
+import base64
 import logging
 import random
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from llm.code_prompts import (
 )
 # MC prompts are used via qa_validator module
 from llm.script_executor import ScriptExecutor, ExecutionResult
+from utils.format_qa import get_frame_paths
 import re
 
 logger = logging.getLogger(__name__)
@@ -154,6 +156,7 @@ class CodeGenerationConfig:
     temperature: float = 0.7
     scene_timeout: int = 600  # 10 minutes per scene
     question_type: Optional[str] = None  # Specific question type to generate (None = mixed)
+    num_frames: int = 0  # Number of scene frames to include as images (0 = text-only)
 
 
 class CodeQAGenerator:
@@ -257,9 +260,39 @@ class CodeQAGenerator:
             if target_question_type:
                 user_prompt += f"\n\nIMPORTANT: Generate the QA pair using question_type = `{target_question_type}` ONLY."
 
+            # Build user message content (text-only or multimodal with images)
+            image_content_parts = None
+            if self.config.num_frames > 0 and self.processed_data_path and self.split_type:
+                frames_dir = os.path.join(self.processed_data_path, 'color', self.split_type)
+                frame_paths = get_frame_paths(scene_name, frames_dir, num_frames=self.config.num_frames)
+                if frame_paths:
+                    image_content_parts = []
+                    for fp in frame_paths:
+                        try:
+                            with open(fp, 'rb') as img_f:
+                                b64 = base64.b64encode(img_f.read()).decode('utf-8')
+                            image_content_parts.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+                            })
+                        except Exception as e:
+                            logger.warning(f"[Scene {scene_name}] Failed to load frame {fp}: {e}")
+                    if not image_content_parts:
+                        image_content_parts = None
+                    else:
+                        logger.info(f"[Scene {scene_name}] Loaded {len(image_content_parts)} images")
+                else:
+                    logger.warning(f"[Scene {scene_name}] No frames found, falling back to text-only")
+
+            if image_content_parts:
+                user_content = image_content_parts + [{"type": "text", "text": user_prompt}]
+                user_message = {"role": "user", "content": user_content}
+            else:
+                user_message = {"role": "user", "content": user_prompt}
+
             messages = [
                 {"role": "system", "content": CODE_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt}
+                user_message
             ]
 
             # Call LLM
@@ -290,7 +323,8 @@ class CodeQAGenerator:
                     qa.computed_answer = result.result
                     # Format QA (with optional LLM MC generation via qa_validator)
                     formatted_qa = self._format_validated_qa(
-                        qa, scene_name, scene_info
+                        qa, scene_name, scene_info,
+                        image_content_parts=image_content_parts
                     )
                     if formatted_qa is not None:
                         logger.info(f"[Scene {scene_name}] QA 格式化完成: question_type={question_type}")
@@ -327,9 +361,16 @@ class CodeQAGenerator:
         self,
         qa: CodeGeneratedQA,
         scene_name: str,
-        scene_info: Dict
+        scene_info: Dict,
+        image_content_parts: Optional[List] = None
     ) -> Optional[Dict]:
         """Format validated QA for final output.
+
+        Args:
+            qa: Parsed QA with computed answer
+            scene_name: Name of the scene
+            scene_info: Scene metadata
+            image_content_parts: Optional image content parts for multimodal LLM validation
 
         Returns:
             Formatted QA dict, or None if the QA should be discarded
@@ -378,7 +419,8 @@ class CodeQAGenerator:
                     question=qa.question,
                     question_type=question_type,
                     ground_truth=verified_answer,
-                    scene_info=scene_info
+                    scene_info=scene_info,
+                    image_content_parts=image_content_parts
                 )
 
                 if not accepted:
@@ -422,7 +464,8 @@ class CodeQAGenerator:
                 question=qa.question,
                 question_type=question_type,
                 ground_truth=verified_answer,
-                scene_info=scene_info
+                scene_info=scene_info,
+                image_content_parts=image_content_parts
             )
             if not accepted:
                 logger.info(f"[FormatQA] LLM 拒绝 MC QA: {rejection_reason} (question_type={question_type})")
@@ -735,6 +778,10 @@ def main():
                         default='Qwen/Qwen3-32B',
                         help='Model name (e.g., Qwen/Qwen3-32B for vllm, gemini-2.5-pro for cockpit)')
 
+    # Image settings
+    parser.add_argument('--num_frames', type=int, default=0,
+                        help='Number of scene frames to send as images (0 = text-only, default: 0)')
+
     # Generation settings
     parser.add_argument('--temperature', type=float, default=0.7,
                         help='LLM sampling temperature')
@@ -795,10 +842,11 @@ def main():
     config = CodeGenerationConfig(
         temperature=args.temperature,
         question_type=args.question_type,
+        num_frames=args.num_frames,
     )
 
     logger.info(f"Generation config: question_type={args.question_type or 'mixed'}, "
-                f"use_llm_mc={args.use_llm_mc}")
+                f"use_llm_mc={args.use_llm_mc}, num_frames={args.num_frames}")
 
     # Create MC config if using LLM MC
     mc_config = None

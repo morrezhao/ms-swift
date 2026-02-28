@@ -41,10 +41,18 @@ class QAValidator:
         question: str,
         question_type: str,
         ground_truth: Union[str, int, float],
-        scene_info: Dict
+        scene_info: Dict,
+        image_content_parts: Optional[List] = None
     ) -> Tuple[bool, Optional[str], float]:
         """
         Validate a QA pair using LLM.
+
+        Args:
+            question: The generated question text
+            question_type: Type of question
+            ground_truth: The computed answer
+            scene_info: Scene metadata
+            image_content_parts: Optional list of image content dicts for multimodal validation
 
         Returns:
             Tuple of (accepted, rejection_reason, confidence)
@@ -59,9 +67,15 @@ class QAValidator:
         )
 
         try:
+            if image_content_parts:
+                user_content = list(image_content_parts) + [{"type": "text", "text": user_prompt}]
+                user_message = {"role": "user", "content": user_content}
+            else:
+                user_message = {"role": "user", "content": user_prompt}
+
             messages = [
                 {"role": "system", "content": VALIDATION_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt}
+                user_message
             ]
 
             llm_response = self.llm_client.generate(

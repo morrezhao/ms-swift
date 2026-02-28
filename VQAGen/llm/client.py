@@ -266,8 +266,8 @@ def prepare_cockpit_request(messages, tools, tool_choice, model_name, llm_params
                 "content": messages
             }
         ]
-    else:
-        messages = snake_to_camel_case(messages)
+    # Pass messages as-is; snake_to_camel_case would break multimodal
+    # content keys like "image_url" -> "imageUrl"
 
     try:
         cockpit_model_name = get_cockpit_model_name(model_name)
@@ -581,7 +581,7 @@ class CockpitClient(LLMClient):
 
     def generate(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict],
         temperature: float = None,
         max_tokens: int = None,
         timeout: int = None
@@ -654,7 +654,7 @@ class CockpitClient(LLMClient):
 
     async def _async_generate(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict],
         llm_params: CockpitLLMParams
     ) -> Optional[str]:
         """Internal async generation method."""
