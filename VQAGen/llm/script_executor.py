@@ -496,6 +496,9 @@ class ScriptExecutor:
     ):
         self.execution_timeout = execution_timeout
         self._pool = None
+        # Warm up: create pool eagerly so heavy imports (open3d etc.)
+        # don't count against execution timeout
+        self._get_pool()
 
     def _get_pool(self):
         """Get or create the worker pool."""
@@ -507,8 +510,13 @@ class ScriptExecutor:
             logger.debug("[ScriptExecutor] Worker pool ready")
         return self._pool
 
-    def _reset_pool(self):
-        """Terminate and discard the current pool."""
+    def _reset_pool(self, recreate: bool = True):
+        """Terminate and recreate the worker pool.
+
+        Args:
+            recreate: If True, immediately create a new pool so
+                heavy imports are done before the next execute() call.
+        """
         if self._pool is not None:
             logger.debug("[ScriptExecutor] Resetting worker pool")
             try:
@@ -517,6 +525,8 @@ class ScriptExecutor:
             except Exception:
                 pass
             self._pool = None
+        if recreate:
+            self._get_pool()
 
     def execute(
         self,
@@ -606,7 +616,7 @@ class ScriptExecutor:
 
     def shutdown(self):
         """Shutdown the worker pool. Call when done."""
-        self._reset_pool()
+        self._reset_pool(recreate=False)
 
     def get_available_functions_doc(self) -> str:
         """Get documentation for available functions."""
