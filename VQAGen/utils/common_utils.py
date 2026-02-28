@@ -519,11 +519,19 @@ def _generate_string_options(
     return None, None, answer_counts
 
 
-def sample_points_in_oriented_bbox_uniform(bbox, distance=0.05):
+def sample_points_in_oriented_bbox_uniform(bbox, distance=0.05, max_points=5000):
     # Calculate number of points along each dimension
     nx = int(np.ceil(bbox.extent[0] / distance))
     ny = int(np.ceil(bbox.extent[1] / distance))
     nz = int(np.ceil(bbox.extent[2] / distance))
+
+    # Cap total grid size to avoid memory/compute explosion in cdist
+    total = nx * ny * nz
+    if total > max_points:
+        scale = (total / max_points) ** (1.0 / 3.0)
+        nx = max(2, int(nx / scale))
+        ny = max(2, int(ny / scale))
+        nz = max(2, int(nz / scale))
 
     # Generate uniform grid
     x = np.linspace(-bbox.extent[0]/2, bbox.extent[0]/2, nx)
@@ -555,7 +563,7 @@ def sample_points_in_oriented_bbox_uniform(bbox, distance=0.05):
     pcd = pcd.crop(bbox)
     
     if len(pcd.points) == 0:
-        return sample_points_in_oriented_bbox_uniform(bbox, distance=distance*0.5)
+        return sample_points_in_oriented_bbox_uniform(bbox, distance=distance*0.5, max_points=max_points)
 
     return np.asarray(pcd.points)
 
