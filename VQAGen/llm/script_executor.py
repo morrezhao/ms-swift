@@ -59,16 +59,22 @@ def _init_worker():
     are imported here and stored in module globals so subsequent
     task executions reuse them without re-importing.
     """
+    import time as _time
     global _worker_np, _worker_math, _worker_o3d
     global _worker_cal_3d_bbox, _worker_sample_points
 
+    t0 = _time.time()
+
     import numpy as np
+    t1 = _time.time()
     import math
     import open3d as o3d
+    t2 = _time.time()
     from utils.common_utils import (
         cal_3d_bbox_distance_between_categories,
         sample_points_in_oriented_bbox_uniform,
     )
+    t3 = _time.time()
 
     _worker_np = np
     _worker_math = math
@@ -76,7 +82,11 @@ def _init_worker():
     _worker_cal_3d_bbox = cal_3d_bbox_distance_between_categories
     _worker_sample_points = sample_points_in_oriented_bbox_uniform
 
-    logger.debug("[Worker] Initialized with heavy imports")
+    logger.info(
+        f"[Worker] Initialized: numpy={t1-t0:.2f}s, "
+        f"open3d={t2-t1:.2f}s, common_utils={t3-t2:.2f}s, "
+        f"total={t3-t0:.2f}s"
+    )
 
 
 def _execute_in_pool_worker(code, scene_info, frame_info):
@@ -88,11 +98,18 @@ def _execute_in_pool_worker(code, scene_info, frame_info):
     Returns:
         dict with 'success', 'result', 'error' keys.
     """
+    import time as _time
+    _t_start = _time.time()
+
     np = _worker_np
     math = _worker_math
     o3d = _worker_o3d
     cal_3d_bbox_distance_between_categories = _worker_cal_3d_bbox
     sample_points_in_oriented_bbox_uniform = _worker_sample_points
+
+    logger.info(f"[Worker] Starting execution, globals loaded: "
+                f"np={np is not None}, o3d={o3d is not None}, "
+                f"cal_3d_bbox={cal_3d_bbox_distance_between_categories is not None}")
 
     try:
         # Allowed built-in functions
@@ -448,7 +465,11 @@ def _execute_in_pool_worker(code, scene_info, frame_info):
         }
 
         processed_code = preprocess_code(code)
+
+        _t_exec = _time.time()
         exec(processed_code, namespace)
+        _t_exec_done = _time.time()
+        logger.info(f"[Worker] exec() took {_t_exec_done - _t_exec:.3f}s")
 
         if 'compute_answer' not in namespace:
             return {
@@ -459,7 +480,14 @@ def _execute_in_pool_worker(code, scene_info, frame_info):
                 ),
             }
 
+        _t_compute = _time.time()
         result = namespace['compute_answer']()
+        _t_compute_done = _time.time()
+        logger.info(
+            f"[Worker] compute_answer() took "
+            f"{_t_compute_done - _t_compute:.3f}s, "
+            f"total worker time: {_t_compute_done - _t_start:.3f}s"
+        )
         return {
             'success': True,
             'result': result,
@@ -503,11 +531,15 @@ class ScriptExecutor:
     def _get_pool(self):
         """Get or create the worker pool."""
         if self._pool is None:
-            logger.debug("[ScriptExecutor] Creating worker pool...")
+            import time as _time
+            _t0 = _time.time()
+            logger.info("[ScriptExecutor] Creating worker pool...")
             self._pool = multiprocessing.Pool(
                 processes=1, initializer=_init_worker
             )
-            logger.debug("[ScriptExecutor] Worker pool ready")
+            logger.info(f"[ScriptExecutor] Pool object created in "
+                        f"{_time.time()-_t0:.2f}s (worker init may "
+                        f"still be running in background)")
         return self._pool
 
     def _reset_pool(self, recreate: bool = True):
@@ -549,16 +581,23 @@ class ScriptExecutor:
         Returns:
             ExecutionResult with success status and result/error
         """
+        import time as _time
         timeout = timeout or self.execution_timeout
 
         try:
+            _t0 = _time.time()
             pool = self._get_pool()
+            _t1 = _time.time()
+            logger.info(f"[ScriptExecutor] Pool ready in {_t1-_t0:.3f}s, "
+                        f"submitting task (timeout={timeout}s)...")
             async_result = pool.apply_async(
                 _execute_in_pool_worker,
                 (code, scene_info, frame_info or {})
             )
 
             result_data = async_result.get(timeout=timeout)
+            _t2 = _time.time()
+            logger.info(f"[ScriptExecutor] Task completed in {_t2-_t1:.3f}s")
 
             if result_data['success']:
                 return ExecutionResult(
