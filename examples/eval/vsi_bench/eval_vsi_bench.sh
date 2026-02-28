@@ -13,16 +13,17 @@
 # Configuration
 MODEL_NAME="Qwen2.5-VL-7B-Instruct"
 MODEL="/upfs/models/Qwen/${MODEL_NAME}"
+# MODEL="/upfs/enhan/trained_models/grpo-vanilla_dataset/Qwen3-VL-8B-Instruct_grpo_step3600"
 VIDEO_DIR="/upfs/enhan/data/nyu-visionx/VSI-Bench"
 FRAMES_DIR="/upfs/enhan/data/nyu-visionx/VSI-Bench-frames"  # Pre-extracted frames (faster)
 DATA_PATH="/upfs/enhan/data/nyu-visionx/VSI-Bench/test.jsonl"  # Local dataset file (JSON/JSONL)
 NUM_FRAMES=32
 EVAL_LIMIT=100  # Set to empty or remove for full evaluation
-ADAPTER=""
+ADAPTER="/upfs/enhan/code/ms-swift/output/vsi_gkd/v12-20260130-133110/checkpoint-200"
 
 # Algorithm and checkpoint settings
-ALGO_NAME="origin"  # Options: origin, grpo, gkd
-CKPT_STEP=""        # e.g., "1000", leave empty for base model
+ALGO_NAME="gkd"  # Options: origin, grpo, gkd
+CKPT_STEP="200"        # e.g., "1000", leave empty for base model
 OUTPUT_DIR="/upfs/enhan/vsi_bench_output/${MODEL_NAME}_${ALGO_NAME}${CKPT_STEP:+_step${CKPT_STEP}}"
 
 # ============================================================
@@ -82,13 +83,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m swift.pipelines.eval.run_vsi_benc
     --video_dir ${FRAMES_DIR} \
     --num_frames ${NUM_FRAMES} \
     --output_dir ${OUTPUT_DIR} \
-    --max_new_tokens 2048 \
+    --max_new_tokens 256 \
     --temperature 0.0 \
     --batch_size 256 \
-    --cot_prompt \
-    --system_prompt_file examples/train/grpo/vsi/vsi_cot_prompt.txt
+    --simple_prompt
+    # --cot_prompt \
+    # --system_prompt_file examples/train/grpo/vsi/vsi_cot_prompt.txt
 
-# --simple_prompt
+# 
 # Note:
 # - Use FRAMES_DIR for pre-extracted frames (faster) or VIDEO_DIR for raw videos
 # - batch_size=0 means process all samples at once (fastest with vLLM)

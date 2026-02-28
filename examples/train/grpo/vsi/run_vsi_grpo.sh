@@ -16,7 +16,7 @@
 # Configuration - Modify these paths for your environment
 # ============================================================
 MODEL="/upfs/models/Qwen/Qwen3-VL-8B-Instruct"
-DATASET_PATH_BASE="/upfs/enhan/code/ms-swift/vsi_data/processed/combined_train.json"  # 32-frame version
+DATASET_PATH_BASE="/upfs/enhan/code/spacial-self-play/VQAGen/data/qa_output/train_grpo.json"  # 32-frame version
 VAL_DATASET_PATH_BASE="/upfs/enhan/code/ms-swift/vsi_data/test/vsi_test.json"  # VSI-Bench test set
 OUTPUT_DIR="output/vsi_grpo"
 

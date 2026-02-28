@@ -1,0 +1,25 @@
+# Core dependencies
+numpy
+torch
+scipy
+tqdm
+
+# 3D processing
+open3d
+plyfile
+alphashape
+
+# Image/Video processing
+imageio
+opencv-python
+
+# Data compression
+lz4
+
+# LLM clients
+openai
+requests
+
+# Optional: for running local LLM server
+# vllm          # pip install vllm (for vLLM server)
+# ollama        # Install from https://ollama.ai

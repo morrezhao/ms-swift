@@ -40,7 +40,7 @@ Usage:
 
     # Multiple datasets (combined and shuffled):
     python preprocess_vsi_data.py \\
-        --datasets scannet:/upfs/enhan/code/ms-swift/vsi_data/formatted_qa_scannet.json:/upfs/enhan/data/processed_data/ARKitScenes/color/train \\
+        --datasets scannet:/upfs/enhan/code/ms-swift/vsi_data/formatted_qa_scannet.json:/upfs/enhan/data/processed_data/ScanNet/color/train \\
         --datasets arkitscenes:/upfs/enhan/code/ms-swift/vsi_data/formatted_qa_arkitscenes.json:/upfs/enhan/data/processed_data/ARKitScenes/color/train \\
         --datasets scannetpp:/upfs/enhan/code/ms-swift/vsi_data/formatted_qa_scannetpp.json:/upfs/enhan/data/processed_data/ARKitScenes/color/train \\
         --output_path /upfs/enhan/code/ms-swift/vsi_data/processed/combined_train.json \\

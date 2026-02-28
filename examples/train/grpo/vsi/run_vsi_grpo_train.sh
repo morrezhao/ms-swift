@@ -21,6 +21,9 @@ export NODE_RANK=${NODE_RANK:-0}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
 export NPROC_PER_NODE=8
+export NCCL_DEBUG=INFO
+export NCCL_SOCKET_IFNAME=eth0
+export GLOO_SOCKET_IFNAME=etho
 
 echo "============================================================"
 echo "Multi-Node Training Configuration:"
@@ -36,7 +39,8 @@ echo "============================================================"
 # Configuration - Modify these paths for your environment
 # ============================================================
 MODEL="/upfs/models/Qwen/Qwen3-VL-8B-Instruct"
-DATASET_PATH="/upfs/enhan/code/ms-swift/vsi_data/processed/combined_train.json"
+DATASET_PATH_BASE="/upfs/enhan/code/ms-swift/vsi_data/processed/combined_train.json"  # 32-frame version
+VAL_DATASET_PATH_BASE="/upfs/enhan/code/ms-swift/vsi_data/test/vsi_test.json"  # VSI-Bench test set
 OUTPUT_DIR="output/vsi_grpo_multi_node"
 
 # CoT System Prompt
@@ -49,8 +53,55 @@ SYSTEM_PROMPT="examples/train/grpo/vsi/vsi_cot_prompt.txt"
 VLLM_SERVER_HOST_1=${VLLM_SERVER_HOST_1:-"<rollout_node1_ip>"}
 VLLM_SERVER_HOST_2=${VLLM_SERVER_HOST_2:-"<rollout_node2_ip>"}
 VLLM_SERVER_PORT_1=${VLLM_SERVER_PORT_1:-8000}
-VLLM_SERVER_PORT_2=${VLLM_SERVER_PORT_2:-8001}
+VLLM_SERVER_PORT_2=${VLLM_SERVER_PORT_2:-8000}
 
+
+NUM_FRAMES=${NUM_FRAMES:-32}
+
+# Validate NUM_FRAMES
+if [[ ! "$NUM_FRAMES" =~ ^(1|2|4|8|16|32)$ ]]; then
+    echo "Error: NUM_FRAMES must be 1, 2, 4, 8, 16, or 32. Got: $NUM_FRAMES"
+    exit 1
+fi
+
+echo "Using NUM_FRAMES=$NUM_FRAMES"
+
+# Determine dataset paths based on NUM_FRAMES
+if [ "$NUM_FRAMES" -eq 32 ]; then
+    DATASET_PATH="$DATASET_PATH_BASE"
+    VAL_DATASET_PATH="$VAL_DATASET_PATH_BASE"
+else
+    # Generate resampled dataset path
+    DATASET_DIR=$(dirname "$DATASET_PATH_BASE")
+    DATASET_NAME=$(basename "$DATASET_PATH_BASE" .json)
+    DATASET_PATH="${DATASET_DIR}/${DATASET_NAME}_${NUM_FRAMES}f.json"
+
+    VAL_DATASET_DIR=$(dirname "$VAL_DATASET_PATH_BASE")
+    VAL_DATASET_NAME=$(basename "$VAL_DATASET_PATH_BASE" .json)
+    VAL_DATASET_PATH="${VAL_DATASET_DIR}/${VAL_DATASET_NAME}_${NUM_FRAMES}f.json"
+
+    # Create resampled datasets if they don't exist
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    if [ ! -f "$DATASET_PATH" ]; then
+        echo "Creating ${NUM_FRAMES}-frame training dataset..."
+        python "$SCRIPT_DIR/resample_frames.py" \
+            --input "$DATASET_PATH_BASE" \
+            --output "$DATASET_PATH" \
+            --num_frames "$NUM_FRAMES"
+    fi
+
+    if [ ! -f "$VAL_DATASET_PATH" ]; then
+        echo "Creating ${NUM_FRAMES}-frame validation dataset..."
+        python "$SCRIPT_DIR/resample_frames.py" \
+            --input "$VAL_DATASET_PATH_BASE" \
+            --output "$VAL_DATASET_PATH" \
+            --num_frames "$NUM_FRAMES"
+    fi
+fi
+
+echo "Training dataset: $DATASET_PATH"
+echo "Validation dataset: $VAL_DATASET_PATH"
 # ============================================================
 # Training Hyperparameters (from run_vsi_grpo.sh)
 # ============================================================

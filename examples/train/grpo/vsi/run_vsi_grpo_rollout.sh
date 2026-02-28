@@ -36,5 +36,7 @@ swift rollout \
     --model ${MODEL} \
     --vllm_tensor_parallel_size ${VLLM_TP_SIZE} \
     --vllm_data_parallel_size ${VLLM_DP_SIZE} \
+    --vllm_max_model_len 4096 \
+    --vllm_gpu_memory_utilization 0.6 \
     --vllm_disable_mm_preprocessor_cache true \
     --port ${ROLLOUT_PORT}
