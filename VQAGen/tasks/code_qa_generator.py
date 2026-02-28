@@ -159,6 +159,77 @@ class CodeGenerationConfig:
     num_frames: int = 0  # Number of scene frames to include as images (0 = text-only)
 
 
+class GenerationTracker:
+    """Thread-safe tracker for QA generation progress across scenes.
+
+    Records successful generation counts, failure counts, and recent failure
+    notes per question type.  Provides ``format_context()`` which renders a
+    prompt section that the LLM can use to self-balance question-type
+    distribution and avoid repeatedly failing patterns.
+    """
+
+    MAX_FAILURE_NOTES = 20
+
+    def __init__(self):
+        self.type_counts: Counter = Counter()
+        self.failure_counts: Counter = Counter()
+        self.failure_notes: List[Dict] = []  # [{type, reason, scene}]
+
+    def record_success(self, question_type: str) -> None:
+        self.type_counts[question_type] += 1
+
+    def record_failure(self, question_type: str, reason: str, scene_name: str = "") -> None:
+        self.failure_counts[question_type] += 1
+        self.failure_notes.append({
+            "type": question_type,
+            "reason": reason,
+            "scene": scene_name,
+        })
+        # Keep only the most recent notes
+        if len(self.failure_notes) > self.MAX_FAILURE_NOTES:
+            self.failure_notes = self.failure_notes[-self.MAX_FAILURE_NOTES:]
+
+    def format_context(self) -> str:
+        """Render current generation state as a prompt section.
+
+        Returns an empty string when nothing has been generated yet so that
+        the first scene behaves identically to the current (pre-tracker)
+        behaviour.
+        """
+        total = sum(self.type_counts.values())
+        if total == 0:
+            return ""
+
+        lines = [
+            "## Generation Progress",
+            f"Total QAs generated so far: {total}",
+            "",
+            "Current distribution:",
+        ]
+        for qt in sorted(VALID_QUESTION_TYPES):
+            count = self.type_counts.get(qt, 0)
+            lines.append(f"  - {qt}: {count}")
+
+        # Summarise recent failures (deduplicate by type+reason)
+        if self.failure_notes:
+            # Count (type, reason) pairs
+            pair_counts: Counter = Counter()
+            for note in self.failure_notes:
+                pair_counts[(note["type"], note["reason"])] += 1
+
+            lines.append("")
+            lines.append(f"Recent failures ({len(self.failure_notes)}):")
+            for (qt, reason), cnt in pair_counts.most_common(10):
+                suffix = f" (×{cnt})" if cnt > 1 else ""
+                lines.append(f'  - {qt}: "{reason}"{suffix}')
+
+        lines.append("")
+        lines.append("Prioritize UNDERREPRESENTED question types that suit this scene's objects.")
+        lines.append("Avoid types that have repeatedly failed unless this scene clearly supports them.")
+
+        return "\n".join(lines)
+
+
 class CodeQAGenerator:
     """
     Code-based LLM QA Generator.
@@ -202,6 +273,7 @@ class CodeQAGenerator:
             self.qa_validator = QAValidator(llm_client, mc_config)
 
         # Will be set during run()
+        self.tracker = None
         self.scene_annos = None
         self.frame_annos = None
         self.all_qa_list = []
@@ -227,6 +299,7 @@ class CodeQAGenerator:
         scene_info: Dict,
         frame_info: Optional[Dict],
         question_type: Optional[str] = None,
+        generation_context: Optional[str] = None,
     ) -> List[Dict]:
         """
         Generate a QA pair for a single scene using code execution.
@@ -259,6 +332,10 @@ class CodeQAGenerator:
             # If a specific question type is requested, append constraint
             if target_question_type:
                 user_prompt += f"\n\nIMPORTANT: Generate the QA pair using question_type = `{target_question_type}` ONLY."
+
+            # Append generation progress context for type balancing
+            if generation_context:
+                user_prompt += f"\n\n{generation_context}"
 
             # Build user message content (text-only or multimodal with images)
             image_content_parts = None
@@ -331,8 +408,13 @@ class CodeQAGenerator:
                         validated_qas.append(formatted_qa)
                     else:
                         logger.warning(f"[Scene {scene_name}] QA 被丢弃: question_type={question_type}")
+                        if self.tracker:
+                            self.tracker.record_failure(question_type, "discarded during validation", scene_name)
                 else:
                     logger.warning(f"[Scene {scene_name}] QA 执行失败: question_type={question_type}, error={result.error_message}")
+                    if self.tracker:
+                        reason = str(result.error_message)[:100] if result.error_message else "code execution failed"
+                        self.tracker.record_failure(question_type, reason, scene_name)
 
             logger.info(f"Scene {scene_name}: Generated {len(validated_qas)} valid QAs")
 
@@ -563,6 +645,9 @@ class CodeQAGenerator:
         all_results = []
         total_answer_counts = Counter()
 
+        # Initialize generation tracker for type balancing
+        self.tracker = GenerationTracker()
+
         def process_scene(scene_name: str):
             import time
             scene_start_time = time.time()
@@ -576,9 +661,25 @@ class CodeQAGenerator:
                     logger.warning(f"Scene {scene_name} not found in metadata")
                     return [], Counter()
 
+                # Get generation progress context for type balancing
+                generation_context = self.tracker.format_context() if self.tracker else None
+
                 logger.debug(f"[ProcessScene] {scene_name}: 加载元数据完成，开始生成 QA...")
-                qas = self.generate_scene_qa(scene_name, scene_info, frame_info)
+                qas = self.generate_scene_qa(
+                    scene_name, scene_info, frame_info,
+                    generation_context=generation_context,
+                )
                 logger.info(f"[ProcessScene] {scene_name}: 生成了 {len(qas)} 个 QA，耗时 {time.time() - scene_start_time:.2f}s")
+
+                # Record successes and failures in tracker
+                if qas:
+                    for qa in qas:
+                        qt = qa.get('question_type', '')
+                        if qt:
+                            self.tracker.record_success(qt)
+                else:
+                    # No QAs produced — record as a generic failure
+                    self.tracker.record_failure("unknown", "no valid QA produced", scene_name)
 
                 # Count answers
                 local_counts = Counter()
