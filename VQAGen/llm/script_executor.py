@@ -34,7 +34,7 @@ def preprocess_code(code: str) -> str:
 
 
 # Default execution timeout in seconds
-DEFAULT_EXECUTION_TIMEOUT = 30
+DEFAULT_EXECUTION_TIMEOUT = 60
 
 # Worker process globals (set by _init_worker)
 _worker_np = None
