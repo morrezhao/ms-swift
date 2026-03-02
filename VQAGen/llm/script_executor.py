@@ -529,7 +529,26 @@ class ScriptExecutor:
         self._get_pool()
 
     def _get_pool(self):
-        """Get or create the worker pool."""
+        """Get or create the worker pool.
+
+        Checks that the existing worker is alive before reusing the pool.
+        If the worker died (e.g., from a previous timeout/crash), the pool
+        is recreated so tasks don't queue to a dead worker.
+        """
+        if self._pool is not None:
+            # Check worker health — _pool attribute holds worker Process list
+            try:
+                workers = self._pool._pool
+                if not workers or not all(w.is_alive() for w in workers):
+                    logger.warning(
+                        "[ScriptExecutor] Worker process is dead, "
+                        "recreating pool"
+                    )
+                    self._reset_pool(recreate=False)
+            except Exception:
+                # Pool internals inaccessible — recreate to be safe
+                self._reset_pool(recreate=False)
+
         if self._pool is None:
             import time as _time
             _t0 = _time.time()

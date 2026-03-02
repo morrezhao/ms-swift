@@ -519,7 +519,9 @@ def _generate_string_options(
     return None, None, answer_counts
 
 
-def sample_points_in_oriented_bbox_uniform(bbox, distance=0.05, max_points=5000):
+def sample_points_in_oriented_bbox_uniform(bbox, distance=0.05, max_points=5000, _depth=0):
+    _MAX_RECURSION = 5
+
     # Calculate number of points along each dimension
     nx = int(np.ceil(bbox.extent[0] / distance))
     ny = int(np.ceil(bbox.extent[1] / distance))
@@ -537,10 +539,10 @@ def sample_points_in_oriented_bbox_uniform(bbox, distance=0.05, max_points=5000)
     x = np.linspace(-bbox.extent[0]/2, bbox.extent[0]/2, nx)
     y = np.linspace(-bbox.extent[1]/2, bbox.extent[1]/2, ny)
     z = np.linspace(-bbox.extent[2]/2, bbox.extent[2]/2, nz)
-    
+
     # Create meshgrid
     xx, yy, zz = np.meshgrid(x, y, z)
-    
+
     # Reshape to (N, 3) array
     points = np.vstack([xx.ravel(), yy.ravel(), zz.ravel()]).T
 
@@ -561,9 +563,14 @@ def sample_points_in_oriented_bbox_uniform(bbox, distance=0.05, max_points=5000)
 
     # Crop points to ensure they're all within the bounding box
     pcd = pcd.crop(bbox)
-    
+
     if len(pcd.points) == 0:
-        return sample_points_in_oriented_bbox_uniform(bbox, distance=distance*0.5, max_points=max_points)
+        if _depth >= _MAX_RECURSION:
+            # Fallback: return bbox center as a single point
+            return np.array(bbox.center).reshape(1, 3)
+        return sample_points_in_oriented_bbox_uniform(
+            bbox, distance=distance * 0.5, max_points=max_points, _depth=_depth + 1
+        )
 
     return np.asarray(pcd.points)
 
