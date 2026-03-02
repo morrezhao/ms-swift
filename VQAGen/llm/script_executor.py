@@ -39,7 +39,7 @@ def preprocess_code(code: str) -> str:
 DEFAULT_EXECUTION_TIMEOUT = 60
 
 # Timeout for worker init / ping health check
-_WORKER_INIT_TIMEOUT = 120
+_WORKER_INIT_TIMEOUT = 600
 _PING_TIMEOUT = 10
 
 # Worker process globals (set by _init_worker)
