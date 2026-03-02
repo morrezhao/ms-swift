@@ -6,6 +6,8 @@ functions. Uses a persistent worker process pool to avoid re-importing
 heavy libraries (open3d, torch, scipy) on every execution.
 """
 
+import os
+import signal
 import sys
 import traceback
 import multiprocessing
@@ -35,6 +37,10 @@ def preprocess_code(code: str) -> str:
 
 # Default execution timeout in seconds
 DEFAULT_EXECUTION_TIMEOUT = 60
+
+# Timeout for worker init / ping health check
+_WORKER_INIT_TIMEOUT = 120
+_PING_TIMEOUT = 10
 
 # Worker process globals (set by _init_worker)
 _worker_np = None
@@ -87,6 +93,11 @@ def _init_worker():
         f"open3d={t2-t1:.2f}s, common_utils={t3-t2:.2f}s, "
         f"total={t3-t0:.2f}s"
     )
+
+
+def _ping_worker():
+    """Trivial function to verify worker is responsive."""
+    return True
 
 
 def _execute_in_pool_worker(code, scene_info, frame_info):
@@ -524,60 +535,87 @@ class ScriptExecutor:
     ):
         self.execution_timeout = execution_timeout
         self._pool = None
-        # Warm up: create pool eagerly so heavy imports (open3d etc.)
-        # don't count against execution timeout
-        self._get_pool()
+        self._worker_ready = False
+        # Warm up: create pool and wait for worker to be truly ready
+        self._ensure_worker_ready()
 
-    def _get_pool(self):
-        """Get or create the worker pool.
+    def _create_pool(self):
+        """Create a new worker pool (without verifying readiness)."""
+        import time as _time
+        _t0 = _time.time()
+        logger.info("[ScriptExecutor] Creating worker pool...")
+        self._pool = multiprocessing.Pool(
+            processes=1, initializer=_init_worker
+        )
+        self._worker_ready = False
+        logger.info(f"[ScriptExecutor] Pool object created in "
+                    f"{_time.time()-_t0:.2f}s (worker init running "
+                    f"in background)")
 
-        Checks that the existing worker is alive before reusing the pool.
-        If the worker died (e.g., from a previous timeout/crash), the pool
-        is recreated so tasks don't queue to a dead worker.
-        """
-        if self._pool is not None:
-            # Check worker health — _pool attribute holds worker Process list
-            try:
-                workers = self._pool._pool
-                if not workers or not all(w.is_alive() for w in workers):
-                    logger.warning(
-                        "[ScriptExecutor] Worker process is dead, "
-                        "recreating pool"
-                    )
-                    self._reset_pool(recreate=False)
-            except Exception:
-                # Pool internals inaccessible — recreate to be safe
-                self._reset_pool(recreate=False)
-
+    def _force_kill_pool(self):
+        """Force-kill pool workers with SIGKILL, then clean up."""
         if self._pool is None:
-            import time as _time
-            _t0 = _time.time()
-            logger.info("[ScriptExecutor] Creating worker pool...")
-            self._pool = multiprocessing.Pool(
-                processes=1, initializer=_init_worker
-            )
-            logger.info(f"[ScriptExecutor] Pool object created in "
-                        f"{_time.time()-_t0:.2f}s (worker init may "
-                        f"still be running in background)")
-        return self._pool
+            return
+        logger.info("[ScriptExecutor] Force-killing worker pool")
+        try:
+            # SIGKILL each worker directly — can't be blocked by C extensions
+            for w in self._pool._pool:
+                if w.is_alive():
+                    try:
+                        os.kill(w.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+        try:
+            self._pool.terminate()
+            self._pool.join()
+        except Exception:
+            pass
+        self._pool = None
+        self._worker_ready = False
 
-    def _reset_pool(self, recreate: bool = True):
-        """Terminate and recreate the worker pool.
+    def _ensure_worker_ready(self):
+        """Ensure pool exists and worker is responsive.
 
-        Args:
-            recreate: If True, immediately create a new pool so
-                heavy imports are done before the next execute() call.
+        Pings the worker with a trivial task. If the worker doesn't
+        respond (stuck in init or from a previous hang), force-kills
+        and recreates the pool.
         """
-        if self._pool is not None:
-            logger.debug("[ScriptExecutor] Resetting worker pool")
+        import time as _time
+
+        for attempt in range(3):
+            if self._pool is None:
+                self._create_pool()
+
+            # If already verified responsive, just do a quick ping
+            ping_timeout = (
+                _PING_TIMEOUT if self._worker_ready
+                else _WORKER_INIT_TIMEOUT
+            )
             try:
-                self._pool.terminate()
-                self._pool.join()
-            except Exception:
-                pass
-            self._pool = None
-        if recreate:
-            self._get_pool()
+                _t0 = _time.time()
+                result = self._pool.apply_async(_ping_worker)
+                result.get(timeout=ping_timeout)
+                elapsed = _time.time() - _t0
+                if not self._worker_ready:
+                    logger.info(
+                        f"[ScriptExecutor] Worker ready "
+                        f"(ping OK in {elapsed:.1f}s)"
+                    )
+                self._worker_ready = True
+                return
+            except Exception as e:
+                logger.warning(
+                    f"[ScriptExecutor] Worker not responsive "
+                    f"(attempt {attempt+1}/3): {e}"
+                )
+                self._force_kill_pool()
+
+        raise RuntimeError(
+            "Failed to create responsive worker after 3 attempts. "
+            "open3d initialization may be hanging on this system."
+        )
 
     def execute(
         self,
@@ -604,19 +642,22 @@ class ScriptExecutor:
         timeout = timeout or self.execution_timeout
 
         try:
+            # Verify worker is alive before submitting real work
+            self._ensure_worker_ready()
+
             _t0 = _time.time()
-            pool = self._get_pool()
-            _t1 = _time.time()
-            logger.info(f"[ScriptExecutor] Pool ready in {_t1-_t0:.3f}s, "
-                        f"submitting task (timeout={timeout}s)...")
-            async_result = pool.apply_async(
+            logger.info(f"[ScriptExecutor] Submitting task "
+                        f"(timeout={timeout}s)...")
+            async_result = self._pool.apply_async(
                 _execute_in_pool_worker,
                 (code, scene_info, frame_info or {})
             )
 
             result_data = async_result.get(timeout=timeout)
-            _t2 = _time.time()
-            logger.info(f"[ScriptExecutor] Task completed in {_t2-_t1:.3f}s")
+            _t1 = _time.time()
+            logger.info(
+                f"[ScriptExecutor] Task completed in {_t1-_t0:.3f}s"
+            )
 
             if result_data['success']:
                 return ExecutionResult(
@@ -636,8 +677,8 @@ class ScriptExecutor:
                 )
 
         except multiprocessing.TimeoutError:
-            # Worker is stuck — kill and recreate on next call
-            self._reset_pool()
+            # Worker is stuck — force kill so next call gets a fresh one
+            self._force_kill_pool()
             error_msg = (
                 f"Execution timeout: code took longer than "
                 f"{timeout} seconds"
@@ -651,9 +692,17 @@ class ScriptExecutor:
                 error_message=error_msg
             )
 
+        except RuntimeError as e:
+            # From _ensure_worker_ready — worker can't start at all
+            return ExecutionResult(
+                success=False,
+                result=None,
+                error_message=str(e)
+            )
+
         except Exception as e:
-            # Pool may be in bad state — reset it
-            self._reset_pool()
+            # Pool may be in bad state — force kill it
+            self._force_kill_pool()
             exc_type, exc_value, exc_tb = sys.exc_info()
             tb_lines = traceback.format_exception(
                 exc_type, exc_value, exc_tb
@@ -674,7 +723,7 @@ class ScriptExecutor:
 
     def shutdown(self):
         """Shutdown the worker pool. Call when done."""
-        self._reset_pool(recreate=False)
+        self._force_kill_pool()
 
     def get_available_functions_doc(self) -> str:
         """Get documentation for available functions."""
