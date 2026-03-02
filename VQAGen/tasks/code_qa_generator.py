@@ -349,12 +349,20 @@ class CodeQAGenerator:
                     image_content_parts = []
                     for fp in frame_paths:
                         try:
-                            with open(fp, 'rb') as img_f:
-                                b64 = base64.b64encode(img_f.read()).decode('utf-8')
-                            mime = 'image/png' if fp.lower().endswith('.png') else 'image/jpeg'
+                            if fp.lower().endswith('.png'):
+                                # Convert PNG to JPEG in memory to reduce payload size
+                                from PIL import Image
+                                import io
+                                img = Image.open(fp).convert('RGB')
+                                buf = io.BytesIO()
+                                img.save(buf, format='JPEG', quality=85)
+                                b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+                            else:
+                                with open(fp, 'rb') as img_f:
+                                    b64 = base64.b64encode(img_f.read()).decode('utf-8')
                             image_content_parts.append({
                                 "type": "image_url",
-                                "image_url": {"url": f"data:{mime};base64,{b64}"}
+                                "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
                             })
                         except Exception as e:
                             logger.warning(f"[Scene {scene_name}] Failed to load frame {fp}: {e}")
